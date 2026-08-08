@@ -1,0 +1,141 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+CSV_FILE = "contacts.csv"
+
+POINT_SIZE = 70
+POINT_ALPHA = 0.40   # transparência dos pontos
+JITTER = 0.12        # pequeno deslocamento vertical
+RANDOM_SEED = 42
+
+# ============================================================
+# LOAD DATA
+# ============================================================
+
+df = pd.read_csv(CSV_FILE)
+
+# ============================================================
+# CONVERT WIDE TABLE TO LONG FORMAT
+# ============================================================
+
+residue_columns = [
+    ("residuo_x", "contatos_residuo_x"),
+    ("residuo_y", "contatos_residuo_y"),
+    ("residuo_z", "contatos_residuo_z"),
+    ("residuo_w", "contatos_residuo_w"),
+    ("residuo_final", "contatos_residuo_final"),
+]
+
+records = []
+
+for _, row in df.iterrows():
+    for residue_col, contacts_col in residue_columns:
+        residue = row.get(residue_col)
+        contacts = row.get(contacts_col)
+
+        if pd.isna(residue) or str(residue).strip() == "":
+            continue
+        if pd.isna(contacts):
+            continue
+
+        records.append({
+            "pose_ID": row["pose_ID"],
+            "affinity": float(row["afinidade"]),
+            "residue": str(residue).strip(),
+            "contacts": float(contacts),
+        })
+
+long_df = pd.DataFrame(records)
+
+# ============================================================
+# DEFINE ORDER OF RESIDUES
+# ============================================================
+
+residues = sorted(long_df["residue"].unique())
+residue_to_y = {residue: i for i, residue in enumerate(residues)}
+
+long_df["y"] = long_df["residue"].map(residue_to_y)
+
+# ============================================================
+# ADD SMALL VERTICAL JITTER
+# ============================================================
+
+rng = np.random.default_rng(RANDOM_SEED)
+
+long_df["y_jitter"] = long_df["y"] + rng.uniform(
+    -JITTER,
+    JITTER,
+    size=len(long_df)
+)
+
+# ============================================================
+# COLOR SCALE FOR AFFINITY
+# ============================================================
+
+norm = Normalize(
+    vmin=long_df["affinity"].min(),
+    vmax=long_df["affinity"].max()
+)
+
+# ============================================================
+# CREATE FIGURE
+# ============================================================
+
+fig_height = max(5, len(residues) * 0.5)
+fig, ax = plt.subplots(figsize=(10, fig_height))
+
+scatter = ax.scatter(
+    long_df["contacts"],
+    long_df["y_jitter"],          # usa o y com jitter
+    c=long_df["affinity"],
+    cmap="viridis_r",
+    norm=norm,
+    s=POINT_SIZE,
+    alpha=POINT_ALPHA,            # mantém transparência
+    edgecolors="none"
+)
+
+# ============================================================
+# AXES
+# ============================================================
+
+ax.set_yticks(range(len(residues)))
+ax.set_yticklabels(residues)
+
+ax.set_xlabel("Number of contacts")
+ax.set_ylabel("Residue")
+ax.set_title("Pose–residue contact distribution")
+
+# Ajuste opcional para eixo X inteiro
+max_contacts = int(np.ceil(long_df["contacts"].max()))
+ax.set_xticks(range(0, max_contacts + 1))
+
+# ============================================================
+# GRID
+# ============================================================
+
+ax.grid(axis="x", alpha=0.25)
+ax.grid(axis="y", alpha=0.15)
+ax.set_axisbelow(True)
+
+# ============================================================
+# COLORBAR
+# ============================================================
+
+cbar = fig.colorbar(scatter, ax=ax, pad=0.02)
+cbar.set_label("Docking affinity (kcal/mol)")
+
+# ============================================================
+# SAVE AND SHOW
+# ============================================================
+
+plt.tight_layout()
+plt.savefig("pose_residue_contacts.png", dpi=600, bbox_inches="tight")
+plt.savefig("pose_residue_contacts.svg", bbox_inches="tight")
+plt.show()
