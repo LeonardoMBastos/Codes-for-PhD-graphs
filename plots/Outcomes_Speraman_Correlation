@@ -1,0 +1,762 @@
+# ============================================================
+# CORRELATION HEATMAP — DOCKANALYZER
+# Google Colab version
+#
+# Variables:
+#   Affinity
+#   RMSD
+#   Score
+#   Contacts
+#   Hydrophobic
+#   H-bonds
+#   Clashes
+#
+# Correlation method = Spearman (rho)
+# Color scale        = Viridis
+# ============================================================
+
+import os
+import glob
+import re
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
+
+
+# ============================================================
+# 1. CONFIGURATION
+# ============================================================
+
+INPUT_FOLDER = "/content"
+
+PNG_FILE = "/content/correlation_heatmap.png"
+SVG_FILE = "/content/correlation_heatmap.svg"
+CSV_OUTPUT = "/content/spearman_correlation_matrix.csv"
+
+# Figure size
+FIG_WIDTH = 18
+FIG_HEIGHT = 15
+
+# Font sizes
+TITLE_SIZE = 26
+TICK_LABEL_SIZE = 22
+CELL_TEXT_SIZE = 20
+COLORBAR_LABEL_SIZE = 22
+COLORBAR_TICK_SIZE = 20
+
+# Spacing
+TITLE_PAD = 28
+COLORBAR_PAD = 0.045
+COLORBAR_LABEL_PAD = 22
+
+# Correlation method
+CORRELATION_METHOD = "spearman"
+
+# Color scale
+COLORMAP = "viridis"
+
+# Correlation limits
+CORRELATION_MIN = -1
+CORRELATION_MAX = 1
+
+
+# ============================================================
+# 2. GLOBAL FONT SETTINGS
+# ============================================================
+
+plt.rcParams.update({
+    "font.size": 16,
+    "axes.titlesize": TITLE_SIZE,
+    "xtick.labelsize": TICK_LABEL_SIZE,
+    "ytick.labelsize": TICK_LABEL_SIZE,
+})
+
+
+# ============================================================
+# 3. NORMALIZE COLUMN NAMES
+# ============================================================
+
+def normalize_column_name(name):
+    """
+    Convert column names into a simplified form for robust
+    matching.
+
+    Examples:
+        H-bonds      -> hbonds
+        H_bonds      -> hbonds
+        RMSD         -> rmsd
+        RSMD         -> rsmd
+        Hydrophobic  -> hydrophobic
+    """
+
+    return re.sub(
+        r"[^a-z0-9]",
+        "",
+        str(name).strip().lower()
+    )
+
+
+# ============================================================
+# 4. COLUMN ALIASES
+# ============================================================
+
+# Canonical variable -> accepted CSV column names
+
+COLUMN_ALIASES = {
+
+    "Affinity": [
+        "affinity",
+        "afinidade"
+    ],
+
+    "RMSD": [
+        "rmsd",
+        "rsmd"
+    ],
+
+    "Score": [
+        "score"
+    ],
+
+    "Contacts": [
+        "contacts"
+    ],
+
+    "Hydrophobic": [
+        "hydrophobic",
+        "hydrophobicinteractions",
+        "hydrophobicinteraction"
+    ],
+
+    "H-bonds": [
+        "hbonds",
+        "hbond",
+        "hydrogenbonds",
+        "hydrogenbond"
+    ],
+
+    "Clashes": [
+        "clashes",
+        "clash"
+    ],
+}
+
+
+# Normalize aliases
+normalized_aliases = {
+
+    variable: {
+        normalize_column_name(alias)
+        for alias in aliases
+    }
+
+    for variable, aliases
+    in COLUMN_ALIASES.items()
+}
+
+
+# ============================================================
+# 5. FUNCTION TO IDENTIFY REQUIRED COLUMNS
+# ============================================================
+
+def identify_columns(columns):
+
+    normalized_columns = {
+
+        normalize_column_name(column): column
+        for column in columns
+    }
+
+    detected = {}
+
+    for variable, aliases in normalized_aliases.items():
+
+        for alias in aliases:
+
+            if alias in normalized_columns:
+
+                detected[variable] = normalized_columns[alias]
+
+                break
+
+    return detected
+
+
+# ============================================================
+# 6. FIND A VALID DOCKANALYZER CSV
+# ============================================================
+
+csv_files = glob.glob(
+    os.path.join(
+        INPUT_FOLDER,
+        "*.csv"
+    )
+)
+
+
+if not csv_files:
+
+    raise FileNotFoundError(
+        "No CSV file was found in /content.\n"
+        "Upload the DockAnalyzer CSV using the Files panel "
+        "in Google Colab."
+    )
+
+
+valid_csv_files = []
+
+
+for file in csv_files:
+
+    try:
+
+        # Read only header
+        header = pd.read_csv(
+            file,
+            nrows=0
+        )
+
+        header.columns = [
+            str(column).strip()
+            for column in header.columns
+        ]
+
+
+        detected_columns = identify_columns(
+            header.columns
+        )
+
+
+        # File is valid only if all seven variables exist
+        if len(detected_columns) == len(COLUMN_ALIASES):
+
+            valid_csv_files.append(
+                (
+                    file,
+                    detected_columns
+                )
+            )
+
+
+    except Exception:
+
+        continue
+
+
+# ============================================================
+# 7. CHECK WHETHER A VALID FILE WAS FOUND
+# ============================================================
+
+if not valid_csv_files:
+
+    print(
+        "\nCSV files found in /content:"
+    )
+
+    for file in csv_files:
+
+        print(
+            " -",
+            os.path.basename(file)
+        )
+
+
+    raise ValueError(
+        "\nNo CSV containing all required variables was found.\n\n"
+        "Required variables:\n"
+        "Affinity\n"
+        "RMSD or RSMD\n"
+        "Score\n"
+        "Contacts\n"
+        "Hydrophobic\n"
+        "H-bonds\n"
+        "Clashes"
+    )
+
+
+# ============================================================
+# 8. SELECT MOST RECENT VALID CSV
+# ============================================================
+
+valid_csv_files.sort(
+    key=lambda x: os.path.getmtime(x[0]),
+    reverse=True
+)
+
+
+CSV_FILE = valid_csv_files[0][0]
+
+
+print(
+    "\nDockAnalyzer CSV selected:"
+)
+
+print(
+    os.path.basename(CSV_FILE)
+)
+
+
+# ============================================================
+# 9. LOAD DATA
+# ============================================================
+
+df = pd.read_csv(
+    CSV_FILE
+)
+
+
+df.columns = [
+    str(column).strip()
+    for column in df.columns
+]
+
+
+print(
+    "\nNumber of poses:",
+    len(df)
+)
+
+print(
+    "Number of columns:",
+    len(df.columns)
+)
+
+
+# ============================================================
+# 10. IDENTIFY COLUMNS IN THE SELECTED FILE
+# ============================================================
+
+detected_columns = identify_columns(
+    df.columns
+)
+
+
+print(
+    "\nVariables detected:"
+)
+
+
+for variable, source_column in detected_columns.items():
+
+    print(
+        f" - {variable}: {source_column}"
+    )
+
+
+# ============================================================
+# 11. CREATE ANALYSIS DATAFRAME
+# ============================================================
+
+analysis_df = pd.DataFrame()
+
+
+for variable in COLUMN_ALIASES.keys():
+
+    source_column = detected_columns[variable]
+
+    analysis_df[variable] = pd.to_numeric(
+        df[source_column],
+        errors="coerce"
+    )
+
+
+# ============================================================
+# 12. REMOVE ROWS WITH MISSING VALUES
+# ============================================================
+
+initial_rows = len(
+    analysis_df
+)
+
+
+analysis_df = analysis_df.dropna(
+    subset=list(
+        COLUMN_ALIASES.keys()
+    )
+).reset_index(
+    drop=True
+)
+
+
+removed_rows = (
+    initial_rows
+    -
+    len(analysis_df)
+)
+
+
+print(
+    "\nRows used for correlation:",
+    len(analysis_df)
+)
+
+
+if removed_rows > 0:
+
+    print(
+        "Rows removed because of missing/non-numeric values:",
+        removed_rows
+    )
+
+
+if analysis_df.empty:
+
+    raise ValueError(
+        "No complete numeric observations are available "
+        "for the correlation analysis."
+    )
+
+
+# ============================================================
+# 13. CHECK VARIABLE VARIANCE
+# ============================================================
+
+constant_variables = [
+
+    column
+    for column in analysis_df.columns
+
+    if analysis_df[column].nunique() <= 1
+
+]
+
+
+if constant_variables:
+
+    print(
+        "\nWARNING:"
+    )
+
+    print(
+        "The following variables have no variance:"
+    )
+
+    for variable in constant_variables:
+
+        print(
+            f" - {variable}"
+        )
+
+    print(
+        "\nCorrelations involving these variables "
+        "will be undefined."
+    )
+
+
+# ============================================================
+# 14. CALCULATE SPEARMAN CORRELATION MATRIX
+# ============================================================
+
+correlation_matrix = analysis_df.corr(
+    method=CORRELATION_METHOD
+)
+
+
+print(
+    "\nSpearman correlation matrix:"
+)
+
+print(
+    correlation_matrix.round(3)
+)
+
+
+# ============================================================
+# 15. SAVE CORRELATION MATRIX
+# ============================================================
+
+correlation_matrix.to_csv(
+    CSV_OUTPUT
+)
+
+
+# ============================================================
+# 16. CREATE FIGURE
+# ============================================================
+
+fig, ax = plt.subplots(
+    figsize=(
+        FIG_WIDTH,
+        FIG_HEIGHT
+    ),
+    facecolor="white"
+)
+
+
+ax.set_facecolor(
+    "white"
+)
+
+
+# ============================================================
+# 17. CREATE HEATMAP
+# ============================================================
+
+# Mask undefined correlations if necessary
+
+matrix_values = np.ma.masked_invalid(
+    correlation_matrix.values
+)
+
+
+cmap = plt.get_cmap(
+    COLORMAP
+).copy()
+
+
+# Undefined correlations appear light gray
+cmap.set_bad(
+    color="#E5E5E5"
+)
+
+
+heatmap = ax.imshow(
+    matrix_values,
+    cmap=cmap,
+    vmin=CORRELATION_MIN,
+    vmax=CORRELATION_MAX,
+    interpolation="nearest",
+    aspect="equal"
+)
+
+
+# ============================================================
+# 18. AXIS LABELS
+# ============================================================
+
+variables = list(
+    correlation_matrix.columns
+)
+
+
+ax.set_xticks(
+    np.arange(
+        len(variables)
+    )
+)
+
+
+ax.set_yticks(
+    np.arange(
+        len(variables)
+    )
+)
+
+
+ax.set_xticklabels(
+    variables,
+    fontsize=TICK_LABEL_SIZE,
+    rotation=35,
+    ha="right",
+    rotation_mode="anchor"
+)
+
+
+ax.set_yticklabels(
+    variables,
+    fontsize=TICK_LABEL_SIZE
+)
+
+
+# ============================================================
+# 19. TITLE
+# ============================================================
+
+ax.set_title(
+    "Correlation between docking metrics",
+    fontsize=TITLE_SIZE,
+    pad=TITLE_PAD
+)
+
+
+# ============================================================
+# 20. ADD CORRELATION VALUES TO CELLS
+# ============================================================
+
+norm = Normalize(
+    vmin=CORRELATION_MIN,
+    vmax=CORRELATION_MAX
+)
+
+
+for i in range(
+    len(variables)
+):
+
+    for j in range(
+        len(variables)
+    ):
+
+        value = correlation_matrix.iloc[
+            i,
+            j
+        ]
+
+
+        if pd.isna(value):
+
+            text = "NA"
+
+            text_color = "black"
+
+        else:
+
+            text = f"{value:.2f}"
+
+
+            # Adaptive text color for better contrast
+            normalized_value = norm(
+                value
+            )
+
+
+            if normalized_value < 0.60:
+
+                text_color = "white"
+
+            else:
+
+                text_color = "black"
+
+
+        ax.text(
+            j,
+            i,
+            text,
+            ha="center",
+            va="center",
+            fontsize=CELL_TEXT_SIZE,
+            fontweight="bold",
+            color=text_color
+        )
+
+
+# ============================================================
+# 21. REMOVE GRID AND AXIS TICKS
+# ============================================================
+
+ax.grid(
+    False
+)
+
+
+ax.tick_params(
+    axis="both",
+    which="both",
+    length=0,
+    pad=12
+)
+
+
+# ============================================================
+# 22. REMOVE OUTER BORDERS
+# ============================================================
+
+for spine in ax.spines.values():
+
+    spine.set_visible(
+        False
+    )
+
+
+# ============================================================
+# 23. COLORBAR
+# ============================================================
+
+cbar = fig.colorbar(
+    heatmap,
+    ax=ax,
+    pad=COLORBAR_PAD,
+    fraction=0.046
+)
+
+
+cbar.set_label(
+    "Spearman correlation (ρ)",
+    fontsize=COLORBAR_LABEL_SIZE,
+    labelpad=COLORBAR_LABEL_PAD
+)
+
+
+cbar.ax.tick_params(
+    labelsize=COLORBAR_TICK_SIZE,
+    length=6
+)
+
+
+cbar.set_ticks(
+    [
+        -1.0,
+        -0.5,
+        0.0,
+        0.5,
+        1.0
+    ]
+)
+
+
+# ============================================================
+# 24. COLORBAR BORDER
+# ============================================================
+
+cbar.outline.set_linewidth(
+    1.0
+)
+
+
+# ============================================================
+# 25. LAYOUT ADJUSTMENTS
+# ============================================================
+
+plt.tight_layout(
+    pad=2.5
+)
+
+
+# ============================================================
+# 26. SAVE FIGURES
+# ============================================================
+
+plt.savefig(
+    PNG_FILE,
+    dpi=600,
+    bbox_inches="tight",
+    facecolor="white"
+)
+
+
+plt.savefig(
+    SVG_FILE,
+    bbox_inches="tight",
+    facecolor="white"
+)
+
+
+# ============================================================
+# 27. SHOW FIGURE
+# ============================================================
+
+plt.show()
+
+
+# ============================================================
+# 28. OUTPUT
+# ============================================================
+
+print(
+    "\nFiles generated:"
+)
+
+print(
+    PNG_FILE
+)
+
+print(
+    SVG_FILE
+)
+
+print(
+    CSV_OUTPUT
+)
