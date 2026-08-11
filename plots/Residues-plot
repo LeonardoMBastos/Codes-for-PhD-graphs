@@ -1,69 +1,272 @@
+# ============================================================
+# POSE–RESIDUE CONTACT DISTRIBUTION
+# Google Colab version
+#
+# X     = Docking affinity
+# Y     = Residue
+# Color = Number of contacts
+#
+# Residues are ordered from top to bottom by decreasing
+# frequency of occurrence in the dataset.
+# ============================================================
+
+import os
+import glob
+import re
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
 
+
 # ============================================================
-# CONFIGURATION
+# 1. CONFIGURATION
 # ============================================================
 
-CSV_FILE = "contacts.csv"
-
-POINT_SIZE = 70
-POINT_ALPHA = 0.40   # transparência dos pontos
-JITTER = 0.12        # pequeno deslocamento vertical
+POINT_SIZE = 130
+POINT_ALPHA = 0.50
+JITTER = 0.12
 RANDOM_SEED = 42
 
+INPUT_FOLDER = "/content"
+
+PNG_FILE = "/content/pose_residue_contacts.png"
+SVG_FILE = "/content/pose_residue_contacts.svg"
+LONG_CSV = "/content/residue_contacts_long.csv"
+
+# Figure size
+FIG_WIDTH = 20
+MIN_FIG_HEIGHT = 12
+HEIGHT_PER_RESIDUE = 0.90
+
+# Font sizes
+TITLE_SIZE = 26
+AXIS_LABEL_SIZE = 24
+TICK_LABEL_SIZE_X = 22
+TICK_LABEL_SIZE_Y = 22
+COLORBAR_LABEL_SIZE = 22
+COLORBAR_TICK_SIZE = 22
+
+# Spacing for labels
+X_LABEL_PAD = 18
+Y_LABEL_PAD = 22
+TITLE_PAD = 24
+COLORBAR_LABEL_PAD = 18
+
+
 # ============================================================
-# LOAD DATA
+# 2. OPTIONAL GLOBAL FONT SETTINGS
+# ============================================================
+
+plt.rcParams.update({
+    "font.size": 14,
+    "axes.titlesize": TITLE_SIZE,
+    "axes.labelsize": AXIS_LABEL_SIZE,
+    "xtick.labelsize": TICK_LABEL_SIZE_X,
+    "ytick.labelsize": TICK_LABEL_SIZE_Y,
+})
+
+
+# ============================================================
+# 3. FIND A VALID DOCKANALYZER CSV
+# ============================================================
+
+csv_files = glob.glob(os.path.join(INPUT_FOLDER, "*.csv"))
+
+if not csv_files:
+    raise FileNotFoundError(
+        "No CSV file was found in /content. "
+        "Upload the DockAnalyzer CSV in Google Colab."
+    )
+
+valid_csv_files = []
+
+for file in csv_files:
+    try:
+        header = pd.read_csv(file, nrows=0)
+        header.columns = [str(col).strip() for col in header.columns]
+        columns = set(header.columns)
+
+        if "affinity" not in columns:
+            continue
+
+        pairs_found = []
+
+        for column in header.columns:
+            match = re.fullmatch(r"residue_(\d+)", column, flags=re.IGNORECASE)
+
+            if match:
+                index = match.group(1)
+                contacts_column = f"contacts_{index}"
+
+                if contacts_column in columns:
+                    pairs_found.append((int(index), column, contacts_column))
+
+        if pairs_found:
+            valid_csv_files.append((file, pairs_found))
+
+    except Exception:
+        continue
+
+if not valid_csv_files:
+    print("\nCSV files found in /content:")
+    for file in csv_files:
+        print(" -", os.path.basename(file))
+
+    raise ValueError(
+        "No valid DockAnalyzer CSV was found.\n"
+        "The file must contain 'affinity' and at least one "
+        "'residue_N / contacts_N' pair."
+    )
+
+valid_csv_files.sort(key=lambda x: os.path.getmtime(x[0]), reverse=True)
+CSV_FILE = valid_csv_files[0][0]
+
+print("\nDockAnalyzer CSV selected:")
+print(os.path.basename(CSV_FILE))
+
+
+# ============================================================
+# 4. LOAD DATA
 # ============================================================
 
 df = pd.read_csv(CSV_FILE)
+df.columns = [str(col).strip() for col in df.columns]
+
+print("\nNumber of poses:", len(df))
+print("Number of columns:", len(df.columns))
+
 
 # ============================================================
-# CONVERT WIDE TABLE TO LONG FORMAT
+# 5. CHECK REQUIRED COLUMNS
 # ============================================================
 
-residue_columns = [
-    ("residuo_x", "contatos_residuo_x"),
-    ("residuo_y", "contatos_residuo_y"),
-    ("residuo_z", "contatos_residuo_z"),
-    ("residuo_w", "contatos_residuo_w"),
-    ("residuo_final", "contatos_residuo_final"),
-]
+required_columns = ["pose_ID", "affinity"]
+missing_columns = [col for col in required_columns if col not in df.columns]
+
+if missing_columns:
+    raise ValueError(f"Required columns not found: {missing_columns}")
+
+
+# ============================================================
+# 6. IDENTIFY RESIDUE / CONTACT PAIRS
+# ============================================================
+
+residue_columns = []
+columns = set(df.columns)
+
+for column in df.columns:
+    match = re.fullmatch(r"residue_(\d+)", column, flags=re.IGNORECASE)
+
+    if match:
+        index = match.group(1)
+        contacts_column = f"contacts_{index}"
+
+        if contacts_column in columns:
+            residue_columns.append((int(index), column, contacts_column))
+
+residue_columns.sort(key=lambda x: x[0])
+
+if not residue_columns:
+    raise ValueError("No residue_N / contacts_N pairs were found.")
+
+print("\nResidue/contact columns detected:")
+for _, residue_col, contacts_col in residue_columns:
+    print(f" - {residue_col} / {contacts_col}")
+
+
+# ============================================================
+# 7. CONVERT WIDE DATA TO LONG FORMAT
+# ============================================================
 
 records = []
 
 for _, row in df.iterrows():
-    for residue_col, contacts_col in residue_columns:
+    for _, residue_col, contacts_col in residue_columns:
         residue = row.get(residue_col)
         contacts = row.get(contacts_col)
 
-        if pd.isna(residue) or str(residue).strip() == "":
+        if pd.isna(residue):
             continue
+
+        residue = str(residue).strip()
+
+        if residue == "":
+            continue
+
         if pd.isna(contacts):
             continue
 
         records.append({
             "pose_ID": row["pose_ID"],
-            "affinity": float(row["afinidade"]),
-            "residue": str(residue).strip(),
-            "contacts": float(contacts),
+            "affinity": row["affinity"],
+            "residue": residue,
+            "contacts": contacts,
         })
 
 long_df = pd.DataFrame(records)
 
+if long_df.empty:
+    raise ValueError("No residue/contact records could be extracted.")
+
+
 # ============================================================
-# DEFINE ORDER OF RESIDUES
+# 8. CONVERT NUMERIC COLUMNS
 # ============================================================
 
-residues = sorted(long_df["residue"].unique())
+long_df["affinity"] = pd.to_numeric(long_df["affinity"], errors="coerce")
+long_df["contacts"] = pd.to_numeric(long_df["contacts"], errors="coerce")
+
+long_df = long_df.dropna(
+    subset=["affinity", "contacts", "residue"]
+).reset_index(drop=True)
+
+if long_df.empty:
+    raise ValueError("No valid residue/contact data were extracted.")
+
+print("\nInteractions extracted:", len(long_df))
+print("Unique residues:", long_df["residue"].nunique())
+
+
+# ============================================================
+# 9. SAVE LONG-FORM TABLE
+# ============================================================
+
+long_df.to_csv(LONG_CSV, index=False)
+
+
+# ============================================================
+# 10. DEFINE RESIDUE ORDER BY FREQUENCY
+# ============================================================
+
+def residue_number(residue):
+    match = re.search(r"(\d+)", str(residue))
+    if match:
+        return int(match.group(1))
+    return float("inf")
+
+residue_frequency = long_df["residue"].value_counts()
+
+residues = sorted(
+    residue_frequency.index,
+    key=lambda residue: (
+        -residue_frequency[residue],
+        residue_number(residue),
+        residue
+    )
+)
+
 residue_to_y = {residue: i for i, residue in enumerate(residues)}
-
 long_df["y"] = long_df["residue"].map(residue_to_y)
 
+print("\nResidue frequency order:")
+for residue in residues:
+    print(f"{residue}: {residue_frequency[residue]} occurrences")
+
+
 # ============================================================
-# ADD SMALL VERTICAL JITTER
+# 11. ADD VERTICAL JITTER
 # ============================================================
 
 rng = np.random.default_rng(RANDOM_SEED)
@@ -74,68 +277,139 @@ long_df["y_jitter"] = long_df["y"] + rng.uniform(
     size=len(long_df)
 )
 
+
 # ============================================================
-# COLOR SCALE FOR AFFINITY
+# 12. COLOR SCALE = NUMBER OF CONTACTS
 # ============================================================
 
 norm = Normalize(
-    vmin=long_df["affinity"].min(),
-    vmax=long_df["affinity"].max()
+    vmin=long_df["contacts"].min(),
+    vmax=long_df["contacts"].max()
 )
 
+
 # ============================================================
-# CREATE FIGURE
+# 13. CREATE FIGURE
 # ============================================================
 
-fig_height = max(5, len(residues) * 0.5)
-fig, ax = plt.subplots(figsize=(10, fig_height))
+fig_height = max(MIN_FIG_HEIGHT, len(residues) * HEIGHT_PER_RESIDUE)
+
+fig, ax = plt.subplots(
+    figsize=(FIG_WIDTH, fig_height),
+    facecolor="white"
+)
+
+ax.set_facecolor("white")
+
+
+# ============================================================
+# 14. SCATTER PLOT
+# ============================================================
 
 scatter = ax.scatter(
-    long_df["contacts"],
-    long_df["y_jitter"],          # usa o y com jitter
-    c=long_df["affinity"],
-    cmap="viridis_r",
+    long_df["affinity"],       # X = affinity
+    long_df["y_jitter"],       # Y = residue + jitter
+    c=long_df["contacts"],     # Color = number of contacts
+    cmap="viridis",
     norm=norm,
     s=POINT_SIZE,
-    alpha=POINT_ALPHA,            # mantém transparência
+    alpha=POINT_ALPHA,
     edgecolors="none"
 )
 
+
 # ============================================================
-# AXES
+# 15. AXES
 # ============================================================
 
 ax.set_yticks(range(len(residues)))
-ax.set_yticklabels(residues)
+ax.set_yticklabels(residues, fontsize=TICK_LABEL_SIZE_Y)
 
-ax.set_xlabel("Number of contacts")
-ax.set_ylabel("Residue")
-ax.set_title("Pose–residue contact distribution")
+# Most frequent residue at the top
+ax.invert_yaxis()
 
-# Ajuste opcional para eixo X inteiro
-max_contacts = int(np.ceil(long_df["contacts"].max()))
-ax.set_xticks(range(0, max_contacts + 1))
+ax.set_xlabel(
+    "Docking affinity (kcal/mol)",
+    fontsize=AXIS_LABEL_SIZE,
+    labelpad=X_LABEL_PAD
+)
+
+ax.set_ylabel(
+    "Residue",
+    fontsize=AXIS_LABEL_SIZE,
+    labelpad=Y_LABEL_PAD
+)
+
+ax.set_title(
+    "Pose–residue contact distribution",
+    fontsize=TITLE_SIZE,
+    pad=TITLE_PAD
+)
+
+ax.tick_params(axis="x", labelsize=TICK_LABEL_SIZE_X)
+ax.tick_params(axis="y", labelsize=TICK_LABEL_SIZE_Y)
+
 
 # ============================================================
-# GRID
+# 16. REMOVE GRID
 # ============================================================
 
-ax.grid(axis="x", alpha=0.25)
-ax.grid(axis="y", alpha=0.15)
-ax.set_axisbelow(True)
+ax.grid(False)
+
 
 # ============================================================
-# COLORBAR
+# 17. CLEAN BORDERS
 # ============================================================
 
-cbar = fig.colorbar(scatter, ax=ax, pad=0.02)
-cbar.set_label("Docking affinity (kcal/mol)")
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+
 
 # ============================================================
-# SAVE AND SHOW
+# 18. COLORBAR
 # ============================================================
 
-plt.tight_layout()
-plt.savefig("pose_residue_contacts.png", dpi=600, bbox_inches="tight")
-plt.savefig("pose_residue_contacts.svg", bbox_inches="tight")
+cbar = fig.colorbar(scatter, ax=ax, pad=0.03)
+cbar.set_label(
+    "Number of contacts",
+    fontsize=COLORBAR_LABEL_SIZE,
+    labelpad=COLORBAR_LABEL_PAD
+)
+cbar.ax.tick_params(labelsize=COLORBAR_TICK_SIZE)
+
+
+# ============================================================
+# 19. LAYOUT ADJUSTMENTS
+# ============================================================
+
+plt.tight_layout(pad=2.0)
+
+
+# ============================================================
+# 20. SAVE FIGURES
+# ============================================================
+
+plt.savefig(
+    PNG_FILE,
+    dpi=600,
+    bbox_inches="tight",
+    facecolor="white"
+)
+
+plt.savefig(
+    SVG_FILE,
+    bbox_inches="tight",
+    facecolor="white"
+)
+
 plt.show()
+
+
+# ============================================================
+# 21. OUTPUT
+# ============================================================
+
+print("\nFiles generated:")
+print(PNG_FILE)
+print(SVG_FILE)
+print(LONG_CSV)
