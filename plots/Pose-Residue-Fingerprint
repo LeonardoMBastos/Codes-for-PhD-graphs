@@ -1,0 +1,1330 @@
+# ============================================================
+# RESIDUE INTERACTION FINGERPRINT — DOCKANALYZER
+# Google Colab version
+#
+# Rows    = Poses
+# Columns = Residues
+# Color   = Number of contacts
+#
+# Pose order:
+#   Best docking affinity -> worst docking affinity
+#
+# Residue order:
+#   Most frequent -> least frequent
+#
+# White cells = No interaction
+#
+# Color gradient:
+#   Reversed Viridis (viridis_r)
+# ============================================================
+
+import os
+import glob
+import re
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+from matplotlib.colors import Normalize
+
+
+# ============================================================
+# 1. CONFIGURATION
+# ============================================================
+
+INPUT_FOLDER = "/content"
+
+PNG_FILE = "/content/residue_interaction_fingerprint.png"
+SVG_FILE = "/content/residue_interaction_fingerprint.svg"
+CSV_OUTPUT = "/content/residue_interaction_fingerprint.csv"
+
+# ------------------------------------------------------------
+# Figure size
+# ------------------------------------------------------------
+
+FIG_WIDTH = 28
+MIN_FIG_HEIGHT = 16
+HEIGHT_PER_POSE = 0.16
+
+# ------------------------------------------------------------
+# Font sizes
+# ------------------------------------------------------------
+
+TITLE_SIZE = 32
+AXIS_LABEL_SIZE = 28
+
+X_TICK_LABEL_SIZE = 20
+Y_TICK_LABEL_SIZE = 16
+
+COLORBAR_LABEL_SIZE = 24
+COLORBAR_TICK_SIZE = 20
+
+# ------------------------------------------------------------
+# Spacing
+# ------------------------------------------------------------
+
+TITLE_PAD = 32
+
+X_LABEL_PAD = 26
+Y_LABEL_PAD = 28
+
+COLORBAR_LABEL_PAD = 22
+COLORBAR_PAD = 0.025
+
+# ------------------------------------------------------------
+# Pose labels
+#
+# 5 = display one label every 5 poses.
+# Change to 1 to display every pose.
+# ------------------------------------------------------------
+
+SHOW_EVERY_N_POSES = 5
+
+
+# ============================================================
+# 2. GLOBAL FONT SETTINGS
+# ============================================================
+
+plt.rcParams.update({
+
+    "font.size": 18,
+
+    "axes.titlesize": TITLE_SIZE,
+
+    "axes.labelsize": AXIS_LABEL_SIZE,
+
+    "xtick.labelsize": X_TICK_LABEL_SIZE,
+
+    "ytick.labelsize": Y_TICK_LABEL_SIZE,
+
+})
+
+
+# ============================================================
+# 3. NORMALIZE COLUMN NAMES
+# ============================================================
+
+def normalize_column_name(name):
+
+    return re.sub(
+        r"[^a-z0-9]",
+        "",
+        str(name).strip().lower()
+    )
+
+
+# ============================================================
+# 4. IDENTIFY BASIC COLUMNS
+# ============================================================
+
+def identify_basic_columns(columns):
+
+    normalized_columns = {
+
+        normalize_column_name(column): column
+
+        for column in columns
+
+    }
+
+
+    detected = {}
+
+
+    # --------------------------------------------------------
+    # pose_ID
+    # --------------------------------------------------------
+
+    for alias in [
+        "poseid",
+        "pose"
+    ]:
+
+        if alias in normalized_columns:
+
+            detected["pose_ID"] = (
+                normalized_columns[alias]
+            )
+
+            break
+
+
+    # --------------------------------------------------------
+    # affinity
+    # --------------------------------------------------------
+
+    for alias in [
+        "affinity",
+        "afinidade"
+    ]:
+
+        if alias in normalized_columns:
+
+            detected["affinity"] = (
+                normalized_columns[alias]
+            )
+
+            break
+
+
+    return detected
+
+
+# ============================================================
+# 5. IDENTIFY RESIDUE / CONTACT COLUMN PAIRS
+# ============================================================
+
+def identify_residue_columns(columns):
+
+    column_set = set(
+        columns
+    )
+
+
+    residue_columns = []
+
+
+    for column in columns:
+
+        match = re.fullmatch(
+            r"residue_(\d+)",
+            str(column).strip(),
+            flags=re.IGNORECASE
+        )
+
+
+        if match:
+
+            index = match.group(1)
+
+            contacts_column = (
+                f"contacts_{index}"
+            )
+
+
+            if contacts_column in column_set:
+
+                residue_columns.append(
+                    (
+                        int(index),
+                        column,
+                        contacts_column
+                    )
+                )
+
+
+    residue_columns.sort(
+        key=lambda x: x[0]
+    )
+
+
+    return residue_columns
+
+
+# ============================================================
+# 6. FIND CSV FILES
+# ============================================================
+
+csv_files = glob.glob(
+
+    os.path.join(
+        INPUT_FOLDER,
+        "*.csv"
+    )
+
+)
+
+
+if not csv_files:
+
+    raise FileNotFoundError(
+
+        "No CSV file was found in /content.\n"
+
+        "Upload the DockAnalyzer CSV using the Files panel "
+
+        "in Google Colab."
+
+    )
+
+
+# ============================================================
+# 7. FIND VALID DOCKANALYZER CSV FILES
+# ============================================================
+
+valid_csv_files = []
+
+
+for file in csv_files:
+
+    try:
+
+        header = pd.read_csv(
+            file,
+            nrows=0
+        )
+
+
+        header.columns = [
+
+            str(column).strip()
+
+            for column in header.columns
+
+        ]
+
+
+        basic_columns = identify_basic_columns(
+            header.columns
+        )
+
+
+        residue_columns = identify_residue_columns(
+            header.columns
+        )
+
+
+        if (
+
+            "pose_ID" in basic_columns
+
+            and
+
+            "affinity" in basic_columns
+
+            and
+
+            len(residue_columns) > 0
+
+        ):
+
+            valid_csv_files.append(
+                (
+                    file,
+                    basic_columns,
+                    residue_columns
+                )
+            )
+
+
+    except Exception:
+
+        continue
+
+
+# ============================================================
+# 8. CHECK VALID FILES
+# ============================================================
+
+if not valid_csv_files:
+
+    print(
+        "\nCSV files found in /content:"
+    )
+
+
+    for file in csv_files:
+
+        print(
+            " -",
+            os.path.basename(file)
+        )
+
+
+    raise ValueError(
+
+        "\nNo valid DockAnalyzer CSV was found.\n\n"
+
+        "The file must contain:\n"
+
+        "pose_ID\n"
+
+        "affinity\n"
+
+        "residue_N / contacts_N pairs"
+
+    )
+
+
+# ============================================================
+# 9. SELECT MOST RECENT VALID CSV
+# ============================================================
+
+valid_csv_files.sort(
+
+    key=lambda x:
+        os.path.getmtime(
+            x[0]
+        ),
+
+    reverse=True
+
+)
+
+
+CSV_FILE = (
+    valid_csv_files[0][0]
+)
+
+
+print(
+    "\nDockAnalyzer CSV selected:"
+)
+
+
+print(
+    os.path.basename(
+        CSV_FILE
+    )
+)
+
+
+# ============================================================
+# 10. LOAD DATA
+# ============================================================
+
+df = pd.read_csv(
+    CSV_FILE
+)
+
+
+df.columns = [
+
+    str(column).strip()
+
+    for column in df.columns
+
+]
+
+
+print(
+    "\nNumber of poses:",
+    len(df)
+)
+
+
+print(
+    "Number of columns:",
+    len(df.columns)
+)
+
+
+# ============================================================
+# 11. IDENTIFY COLUMNS
+# ============================================================
+
+basic_columns = identify_basic_columns(
+    df.columns
+)
+
+
+residue_columns = identify_residue_columns(
+    df.columns
+)
+
+
+POSE_COLUMN = basic_columns[
+    "pose_ID"
+]
+
+
+AFFINITY_COLUMN = basic_columns[
+    "affinity"
+]
+
+
+print(
+    "\nResidue/contact columns detected:"
+)
+
+
+for _, residue_col, contacts_col in residue_columns:
+
+    print(
+        f" - {residue_col} / {contacts_col}"
+    )
+
+
+# ============================================================
+# 12. PREPARE BASIC POSE DATA
+# ============================================================
+
+pose_df = pd.DataFrame()
+
+
+pose_df["pose_ID"] = (
+
+    df[
+        POSE_COLUMN
+    ]
+
+    .astype(str)
+
+    .str.strip()
+
+)
+
+
+pose_df["affinity"] = pd.to_numeric(
+
+    df[
+        AFFINITY_COLUMN
+    ],
+
+    errors="coerce"
+
+)
+
+
+# ============================================================
+# 13. CONVERT RESIDUE DATA TO LONG FORMAT
+# ============================================================
+
+records = []
+
+
+for row_index, row in df.iterrows():
+
+
+    pose_id = str(
+
+        row[
+            POSE_COLUMN
+        ]
+
+    ).strip()
+
+
+    affinity = pd.to_numeric(
+
+        row[
+            AFFINITY_COLUMN
+        ],
+
+        errors="coerce"
+
+    )
+
+
+    if pd.isna(
+        affinity
+    ):
+
+        continue
+
+
+    for _, residue_col, contacts_col in residue_columns:
+
+
+        residue = row.get(
+            residue_col
+        )
+
+
+        contacts = row.get(
+            contacts_col
+        )
+
+
+        if pd.isna(
+            residue
+        ):
+
+            continue
+
+
+        residue = str(
+            residue
+        ).strip()
+
+
+        if residue == "":
+
+            continue
+
+
+        contacts = pd.to_numeric(
+            contacts,
+            errors="coerce"
+        )
+
+
+        if pd.isna(
+            contacts
+        ):
+
+            continue
+
+
+        records.append(
+            {
+
+                "pose_ID":
+                    pose_id,
+
+                "affinity":
+                    float(affinity),
+
+                "residue":
+                    residue,
+
+                "contacts":
+                    float(contacts),
+
+            }
+        )
+
+
+long_df = pd.DataFrame(
+    records
+)
+
+
+if long_df.empty:
+
+    raise ValueError(
+
+        "No valid residue-contact information "
+
+        "could be extracted."
+
+    )
+
+
+print(
+    "\nInteractions extracted:",
+    len(long_df)
+)
+
+
+print(
+    "Unique residues:",
+    long_df[
+        "residue"
+    ].nunique()
+)
+
+
+# ============================================================
+# 14. RESIDUE FREQUENCY
+# ============================================================
+
+# Number of different poses containing each residue
+
+residue_frequency = (
+
+    long_df
+
+    .groupby(
+        "residue"
+    )["pose_ID"]
+
+    .nunique()
+
+)
+
+
+# ============================================================
+# 15. EXTRACT RESIDUE NUMBER
+# ============================================================
+
+def residue_number(residue):
+
+    match = re.search(
+        r"(\d+)",
+        str(residue)
+    )
+
+
+    if match:
+
+        return int(
+            match.group(1)
+        )
+
+
+    return float(
+        "inf"
+    )
+
+
+# ============================================================
+# 16. ORDER RESIDUES BY FREQUENCY
+# ============================================================
+
+residues = sorted(
+
+    residue_frequency.index,
+
+    key=lambda residue: (
+
+        -residue_frequency[
+            residue
+        ],
+
+        residue_number(
+            residue
+        ),
+
+        residue
+
+    )
+
+)
+
+
+print(
+    "\nResidue order:"
+)
+
+
+for residue in residues:
+
+    print(
+
+        f"{residue}: "
+
+        f"{residue_frequency[residue]} poses"
+
+    )
+
+
+# ============================================================
+# 17. ORDER POSES BY AFFINITY
+# ============================================================
+
+pose_order_df = (
+
+    long_df[
+        [
+            "pose_ID",
+            "affinity"
+        ]
+    ]
+
+    .drop_duplicates(
+        subset="pose_ID"
+    )
+
+    .sort_values(
+
+        by=[
+            "affinity",
+            "pose_ID"
+        ],
+
+        ascending=[
+            True,
+            True
+        ]
+
+    )
+
+    .reset_index(
+        drop=True
+    )
+
+)
+
+
+poses = pose_order_df[
+    "pose_ID"
+].tolist()
+
+
+affinity_map = dict(
+
+    zip(
+
+        pose_order_df[
+            "pose_ID"
+        ],
+
+        pose_order_df[
+            "affinity"
+        ]
+
+    )
+
+)
+
+
+# ============================================================
+# 18. BUILD FINGERPRINT MATRIX
+# ============================================================
+
+# If the same residue appears more than once within one pose,
+# its contact values are summed.
+
+fingerprint = (
+
+    long_df
+
+    .pivot_table(
+
+        index="pose_ID",
+
+        columns="residue",
+
+        values="contacts",
+
+        aggfunc="sum",
+
+        fill_value=0
+
+    )
+
+)
+
+
+fingerprint = fingerprint.reindex(
+
+    index=poses,
+
+    columns=residues,
+
+    fill_value=0
+
+)
+
+
+# ============================================================
+# 19. SAVE FINGERPRINT MATRIX
+# ============================================================
+
+fingerprint.to_csv(
+    CSV_OUTPUT
+)
+
+
+# ============================================================
+# 20. PREPARE MATRIX FOR PLOTTING
+# ============================================================
+
+matrix = fingerprint.to_numpy(
+    dtype=float
+)
+
+
+# Zero = no detected interaction
+
+masked_matrix = np.ma.masked_where(
+
+    matrix <= 0,
+
+    matrix
+
+)
+
+
+# ============================================================
+# 21. COLOR SCALE
+# ============================================================
+
+positive_contacts = matrix[
+    matrix > 0
+]
+
+
+if len(
+    positive_contacts
+) == 0:
+
+    raise ValueError(
+        "No positive residue contacts were found."
+    )
+
+
+MIN_CONTACTS = positive_contacts.min()
+
+MAX_CONTACTS = positive_contacts.max()
+
+
+norm = Normalize(
+
+    vmin=MIN_CONTACTS,
+
+    vmax=MAX_CONTACTS
+
+)
+
+
+# ============================================================
+# 22. REVERSED VIRIDIS GRADIENT
+# ============================================================
+
+# IMPORTANT:
+#
+# Original Viridis:
+# low  -> purple/blue
+# high -> green/yellow
+#
+# Reversed Viridis:
+# low  -> yellow/green
+# high -> blue/purple
+
+cmap = plt.get_cmap(
+    "viridis_r"
+).copy()
+
+
+# No interaction = white
+
+cmap.set_bad(
+    color="white"
+)
+
+
+# ============================================================
+# 23. CREATE FIGURE
+# ============================================================
+
+fig_height = max(
+
+    MIN_FIG_HEIGHT,
+
+    len(
+        poses
+    )
+    *
+    HEIGHT_PER_POSE
+
+)
+
+
+fig, ax = plt.subplots(
+
+    figsize=(
+        FIG_WIDTH,
+        fig_height
+    ),
+
+    facecolor="white"
+
+)
+
+
+ax.set_facecolor(
+    "white"
+)
+
+
+# ============================================================
+# 24. CREATE FINGERPRINT HEATMAP
+# ============================================================
+
+heatmap = ax.imshow(
+
+    masked_matrix,
+
+    cmap=cmap,
+
+    norm=norm,
+
+    interpolation="nearest",
+
+    aspect="auto"
+
+)
+
+
+# ============================================================
+# 25. X AXIS — RESIDUES
+# ============================================================
+
+ax.set_xticks(
+
+    np.arange(
+        len(
+            residues
+        )
+    )
+
+)
+
+
+ax.set_xticklabels(
+
+    residues,
+
+    fontsize=X_TICK_LABEL_SIZE,
+
+    rotation=60,
+
+    ha="right",
+
+    rotation_mode="anchor"
+
+)
+
+
+# ============================================================
+# 26. Y AXIS — POSES
+# ============================================================
+
+pose_tick_positions = np.arange(
+
+    0,
+
+    len(
+        poses
+    ),
+
+    SHOW_EVERY_N_POSES
+
+)
+
+
+pose_tick_labels = []
+
+
+for position in pose_tick_positions:
+
+
+    pose = poses[
+        position
+    ]
+
+
+    affinity = affinity_map[
+        pose
+    ]
+
+
+    pose_tick_labels.append(
+
+        f"{position + 1}  ({affinity:.2f})"
+
+    )
+
+
+ax.set_yticks(
+    pose_tick_positions
+)
+
+
+ax.set_yticklabels(
+
+    pose_tick_labels,
+
+    fontsize=Y_TICK_LABEL_SIZE
+
+)
+
+
+# ============================================================
+# 27. AXIS TITLES
+# ============================================================
+
+ax.set_xlabel(
+
+    "Residue",
+
+    fontsize=AXIS_LABEL_SIZE,
+
+    labelpad=X_LABEL_PAD
+
+)
+
+
+ax.set_ylabel(
+
+    "Poses ordered by docking affinity",
+
+    fontsize=AXIS_LABEL_SIZE,
+
+    labelpad=Y_LABEL_PAD
+
+)
+
+
+# ============================================================
+# 28. TITLE
+# ============================================================
+
+ax.set_title(
+
+    "Residue interaction fingerprint",
+
+    fontsize=TITLE_SIZE,
+
+    pad=TITLE_PAD
+
+)
+
+
+# ============================================================
+# 29. REMOVE GRID
+# ============================================================
+
+ax.grid(
+    False
+)
+
+
+# ============================================================
+# 30. TICK APPEARANCE
+# ============================================================
+
+ax.tick_params(
+
+    axis="x",
+
+    length=0,
+
+    pad=10
+
+)
+
+
+ax.tick_params(
+
+    axis="y",
+
+    length=0,
+
+    pad=10
+
+)
+
+
+# ============================================================
+# 31. REMOVE OUTER BORDERS
+# ============================================================
+
+for spine in ax.spines.values():
+
+    spine.set_visible(
+        False
+    )
+
+
+# ============================================================
+# 32. COLORBAR
+# ============================================================
+
+cbar = fig.colorbar(
+
+    heatmap,
+
+    ax=ax,
+
+    pad=COLORBAR_PAD,
+
+    fraction=0.035
+
+)
+
+
+cbar.set_label(
+
+    "Number of contacts",
+
+    fontsize=COLORBAR_LABEL_SIZE,
+
+    labelpad=COLORBAR_LABEL_PAD
+
+)
+
+
+cbar.ax.tick_params(
+
+    labelsize=COLORBAR_TICK_SIZE,
+
+    length=6
+
+)
+
+
+# ============================================================
+# 33. INTEGER COLORBAR TICKS
+# ============================================================
+
+contact_min_int = int(
+
+    np.floor(
+        MIN_CONTACTS
+    )
+
+)
+
+
+contact_max_int = int(
+
+    np.ceil(
+        MAX_CONTACTS
+    )
+
+)
+
+
+if (
+
+    contact_max_int
+    -
+    contact_min_int
+
+) <= 15:
+
+    cbar.set_ticks(
+
+        range(
+
+            contact_min_int,
+
+            contact_max_int + 1
+
+        )
+
+    )
+
+
+# ============================================================
+# 34. EXPLANATORY NOTE
+# ============================================================
+
+ax.text(
+
+    1.0,
+
+    -0.14,
+
+    "White = no detected residue contact",
+
+    transform=ax.transAxes,
+
+    ha="right",
+
+    va="top",
+
+    fontsize=17
+
+)
+
+
+# ============================================================
+# 35. LAYOUT
+# ============================================================
+
+plt.tight_layout(
+    pad=2.5
+)
+
+
+# ============================================================
+# 36. SAVE FIGURES
+# ============================================================
+
+plt.savefig(
+
+    PNG_FILE,
+
+    dpi=600,
+
+    bbox_inches="tight",
+
+    facecolor="white"
+
+)
+
+
+plt.savefig(
+
+    SVG_FILE,
+
+    bbox_inches="tight",
+
+    facecolor="white"
+
+)
+
+
+# ============================================================
+# 37. SHOW FIGURE
+# ============================================================
+
+plt.show()
+
+
+# ============================================================
+# 38. OUTPUT
+# ============================================================
+
+print(
+    "\nFingerprint dimensions:"
+)
+
+
+print(
+
+    f"{fingerprint.shape[0]} poses × "
+
+    f"{fingerprint.shape[1]} residues"
+
+)
+
+
+print(
+    "\nPose ordering:"
+)
+
+
+print(
+    "Top = most favorable affinity"
+)
+
+
+print(
+    "Bottom = least favorable affinity"
+)
+
+
+print(
+    "\nResidue ordering:"
+)
+
+
+print(
+    "Left = most frequent residue"
+)
+
+
+print(
+    "Right = least frequent residue"
+)
+
+
+print(
+    "\nColor gradient:"
+)
+
+
+print(
+    "Lower contact count = yellow/green"
+)
+
+
+print(
+    "Higher contact count = blue/purple"
+)
+
+
+print(
+    "\nFiles generated:"
+)
+
+
+print(
+    PNG_FILE
+)
+
+
+print(
+    SVG_FILE
+)
+
+
+print(
+    CSV_OUTPUT
+)
