@@ -1,0 +1,57 @@
+# ============================================================
+# APAGAR TODAS AS INTERAÇÕES JÁ DESENHADAS
+# ============================================================
+
+~contacts
+~hbonds
+
+# ============================================================
+# PROTEÍNA
+# permanece branca em cartoon
+# ============================================================
+
+hide #1 atoms
+show #1 cartoons
+color #1 #F0F0F0 cartoons
+
+# Define sticks para os átomos que forem revelados depois
+style #1 stick
+color #1 #C94A4A atoms
+
+# ============================================================
+# LIGANTE
+# ============================================================
+
+show #2 atoms
+style #2 stick
+color #2 #404040 atoms
+
+# ============================================================
+# SOMENTE H-BONDS RECEPTOR ↔ LIGANTE
+# ============================================================
+
+hbonds #1 restrict #2 reveal true color dodgerblue radius 0.08 dashes 6
+
+# ============================================================
+# SOMENTE CONTATOS RECEPTOR ↔ LIGANTE
+# ============================================================
+
+contacts #1 restrict #2 reveal true color forestgreen radius 0.05 dashes 6
+
+# ============================================================
+# LIMPAR SELEÇÃO
+# ============================================================
+
+~select
+
+# ============================================================
+# VISUAL
+# mantém o receptor inteiro, sem centralizar no ligante
+# ============================================================
+
+lighting soft
+graphics silhouettes true color #B0B0B0 width 1
+camera ortho
+
+view #1
+zoom 0.95
