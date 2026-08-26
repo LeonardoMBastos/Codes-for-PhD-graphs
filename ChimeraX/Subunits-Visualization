@@ -1,0 +1,25 @@
+set bgColor white
+
+# Remove quaisquer labels já existentes
+~label
+
+hide #1-4 atoms
+hide #1-4 bonds
+hide #1 surface
+
+show #1-4 cartoons
+
+color #1 #E8E8E8
+transparency #1 55 cartoons
+
+color #2 #AFCBFF
+color #3 #DDB7EE
+color #4 #AEE2C8
+
+lighting soft
+graphics silhouettes true
+
+view all
+zoom 1.2
+turn y 18
+turn x -8
