@@ -1,0 +1,53 @@
+set bgColor white
+
+# limpar visualização
+hide #1-4 atoms
+hide #1-4 bonds
+hide #1-4 cartoons
+surface close #1-4
+graphics silhouettes false
+
+# =========================
+# #1 = receptor base
+# estilo fantasma
+# =========================
+show #1 cartoons
+color #1 #F2F2F2 cartoons
+transparency #1 78 target c
+
+surface #1
+surface style #1 solid
+color #1 #E6E6E6 surfaces
+transparency #1 70 target s
+
+# =========================
+# #2 = alpha1
+# azul pastel
+# =========================
+show #2 cartoons
+color #2 #C9D7F0 cartoons
+transparency #2 0 target c
+
+# =========================
+# #3 = beta2
+# verde pastel
+# =========================
+show #3 cartoons
+color #3 #CFE3C2 cartoons
+transparency #3 0 target c
+
+# =========================
+# #4 = gamma2
+# lilás pastel
+# =========================
+show #4 cartoons
+color #4 #D9D2F0 cartoons
+transparency #4 0 target c
+
+# iluminação e enquadramento
+lighting soft
+graphics silhouettes false
+view all
+zoom 1.15
+turn y 15
+turn x -8
