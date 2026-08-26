@@ -1,0 +1,9 @@
+~label
+~select
+
+# seleciona resíduos da proteína em contato/proximidade com o ligante
+select zone #2 4.0 residue true
+select intersect sel #1
+
+# rotula somente os resíduos selecionados
+label sel residues text "{0.name}{0.number}" color black height 0.9
