@@ -1,0 +1,518 @@
+# ============================================================
+# POSE–RESIDUE CONTACT DISTRIBUTION BY SITE
+# Adaptado para nova planilha
+#
+# Gera um gráfico para cada site:
+# X     = affinity
+# Y     = residue
+# Cor   = compound
+# Tamanho da bolha = número de contatos
+#
+# Regras:
+# - resíduos compartilhados por diferentes compostos ficam
+#   na mesma linha do eixo Y
+# - não usa mais degradê para contatos
+# - gera 1 figura por site
+#
+# Compatível com Google Colab
+# ============================================================
+
+import os
+import re
+import glob
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+
+# ============================================================
+# 1. CONFIGURAÇÕES
+# ============================================================
+
+INPUT_FOLDER = "/content"
+OUTPUT_FOLDER = "/content/site_residue_plots"
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+RANDOM_SEED = 42
+
+# ----- Aparência geral -----
+FIG_WIDTH = 18
+MIN_FIG_HEIGHT = 8
+HEIGHT_PER_RESIDUE = 0.55
+
+TITLE_SIZE = 24
+AXIS_LABEL_SIZE = 20
+TICK_LABEL_SIZE_X = 15
+TICK_LABEL_SIZE_Y = 14
+LEGEND_TITLE_SIZE = 14
+LEGEND_TEXT_SIZE = 13
+
+POINT_ALPHA = 0.60
+POINT_EDGEWIDTH = 0.6
+POINT_EDGECOLOR = "black"
+
+# Tamanho das bolhas (baseado em número de contatos)
+MIN_BUBBLE_SIZE = 30
+MAX_BUBBLE_SIZE = 300
+
+# Pequeno deslocamento vertical por composto para ajudar
+# a visualizar compostos diferentes no mesmo resíduo
+COMPOUND_VERTICAL_SPACING = 0.14
+RANDOM_Y_JITTER = 0.025
+
+# Defina True se quiser inverter o eixo X
+# (afinidades mais negativas à direita, como no gráfico anexado)
+REVERSE_X_AXIS = False
+
+# Cores baseadas no gráfico de referência
+COMPOUND_COLORS = {
+    "DZP":  "#c5b3d6",  # lilás
+    "PHB":  "#d59a1a",  # laranja/mostarda
+    "GABA": "#c44e4e",  # vermelho
+    "LIN":  "#86c88a",  # verde
+    "NER":  "#8fb5da",  # azul
+}
+
+# Ordem preferencial na legenda
+COMPOUND_ORDER = ["DZP", "PHB", "GABA", "LIN", "NER"]
+
+plt.rcParams.update({
+    "font.size": 12,
+    "axes.titlesize": TITLE_SIZE,
+    "axes.labelsize": AXIS_LABEL_SIZE,
+    "xtick.labelsize": TICK_LABEL_SIZE_X,
+    "ytick.labelsize": TICK_LABEL_SIZE_Y,
+    "font.family": "sans-serif"
+})
+
+# ============================================================
+# 2. FUNÇÕES AUXILIARES
+# ============================================================
+
+def sanitize_filename(text):
+    text = str(text).strip()
+    text = re.sub(r"[^\w\s-]", "", text)
+    text = re.sub(r"[\s/]+", "_", text)
+    return text
+
+def residue_number(residue):
+    match = re.search(r"(\d+)", str(residue))
+    return int(match.group(1)) if match else float("inf")
+
+def normalize_columns(df):
+    df = df.copy()
+    df.columns = [str(col).strip() for col in df.columns]
+    return df
+
+def find_input_table(input_folder):
+    candidates = []
+    patterns = ["*.csv", "*.xlsx", "*.xls"]
+
+    for pattern in patterns:
+        candidates.extend(glob.glob(os.path.join(input_folder, pattern)))
+
+    if not candidates:
+        raise FileNotFoundError(
+            "Nenhum arquivo CSV/XLSX/XLS foi encontrado em /content."
+        )
+
+    valid_files = []
+
+    for file in candidates:
+        try:
+            if file.lower().endswith(".csv"):
+                header = pd.read_csv(file, nrows=0)
+            else:
+                header = pd.read_excel(file, nrows=0)
+
+            header = normalize_columns(header)
+            cols = set(header.columns)
+
+            required_base = {"site", "compound", "pose_ID", "affinity"}
+            if not required_base.issubset(cols):
+                continue
+
+            residue_pairs = []
+            for col in header.columns:
+                match = re.fullmatch(r"residue_(\d+)", col, flags=re.IGNORECASE)
+                if match:
+                    idx = match.group(1)
+                    ccol = f"contacts_{idx}"
+                    if ccol in cols:
+                        residue_pairs.append((int(idx), col, ccol))
+
+            if residue_pairs:
+                valid_files.append((file, residue_pairs))
+
+        except Exception:
+            continue
+
+    if not valid_files:
+        raise ValueError(
+            "Nenhum arquivo válido foi encontrado.\n"
+            "O arquivo precisa ter pelo menos as colunas:\n"
+            "site, compound, pose_ID, affinity, residue_1, contacts_1 ..."
+        )
+
+    valid_files.sort(key=lambda x: os.path.getmtime(x[0]), reverse=True)
+    return valid_files[0][0]
+
+def read_table(file_path):
+    if file_path.lower().endswith(".csv"):
+        df = pd.read_csv(file_path)
+    else:
+        df = pd.read_excel(file_path)
+    return normalize_columns(df)
+
+def detect_residue_pairs(df):
+    cols = set(df.columns)
+    pairs = []
+
+    for col in df.columns:
+        match = re.fullmatch(r"residue_(\d+)", col, flags=re.IGNORECASE)
+        if match:
+            idx = match.group(1)
+            ccol = f"contacts_{idx}"
+            if ccol in cols:
+                pairs.append((int(idx), col, ccol))
+
+    pairs.sort(key=lambda x: x[0])
+
+    if not pairs:
+        raise ValueError("Nenhum par residue_N / contacts_N foi encontrado.")
+
+    return pairs
+
+def build_long_table(df, residue_pairs):
+    records = []
+
+    for _, row in df.iterrows():
+        site = row.get("site")
+        compound = row.get("compound")
+        pose_id = row.get("pose_ID")
+        affinity = row.get("affinity")
+
+        for _, residue_col, contacts_col in residue_pairs:
+            residue = row.get(residue_col)
+            contacts = row.get(contacts_col)
+
+            if pd.isna(residue) or pd.isna(contacts):
+                continue
+
+            residue = str(residue).strip()
+            if residue == "":
+                continue
+
+            records.append({
+                "site": site,
+                "compound": str(compound).strip() if not pd.isna(compound) else compound,
+                "pose_ID": pose_id,
+                "affinity": affinity,
+                "residue": residue,
+                "contacts": contacts,
+            })
+
+    long_df = pd.DataFrame(records)
+
+    if long_df.empty:
+        raise ValueError("Nenhum registro válido de resíduo/contato foi extraído.")
+
+    long_df["affinity"] = pd.to_numeric(long_df["affinity"], errors="coerce")
+    long_df["contacts"] = pd.to_numeric(long_df["contacts"], errors="coerce")
+
+    long_df = long_df.dropna(subset=["site", "compound", "pose_ID", "affinity", "residue", "contacts"])
+
+    # Se, por alguma razão, o mesmo resíduo aparecer repetido
+    # na mesma pose/composto, agregamos somando os contatos
+    long_df = (
+        long_df
+        .groupby(["site", "compound", "pose_ID", "affinity", "residue"], as_index=False)
+        .agg({"contacts": "sum"})
+    )
+
+    return long_df
+
+def get_compound_order(compounds):
+    compounds = [str(c) for c in compounds]
+    ordered = [c for c in COMPOUND_ORDER if c in compounds]
+    remaining = sorted([c for c in compounds if c not in ordered])
+    return ordered + remaining
+
+def bubble_size_scale(values, vmin=None, vmax=None):
+    values = np.asarray(values, dtype=float)
+
+    if vmin is None:
+        vmin = np.nanmin(values)
+    if vmax is None:
+        vmax = np.nanmax(values)
+
+    if np.isclose(vmin, vmax):
+        return np.full_like(values, (MIN_BUBBLE_SIZE + MAX_BUBBLE_SIZE) / 2.0, dtype=float)
+
+    scaled = MIN_BUBBLE_SIZE + (values - vmin) * (MAX_BUBBLE_SIZE - MIN_BUBBLE_SIZE) / (vmax - vmin)
+    return scaled
+
+def make_size_legend_values(values):
+    values = np.asarray(values, dtype=float)
+    uniq = np.unique(values[~np.isnan(values)])
+
+    if len(uniq) == 0:
+        return [1, 2, 3]
+
+    if len(uniq) <= 4:
+        return uniq.tolist()
+
+    q = np.quantile(uniq, [0.0, 0.33, 0.66, 1.0])
+    q = np.unique(np.round(q).astype(int))
+    q = q[q > 0]
+
+    if len(q) < 3:
+        q = np.unique(np.round(np.quantile(uniq, [0.0, 0.5, 1.0])).astype(int))
+        q = q[q > 0]
+
+    return q.tolist()
+
+# ============================================================
+# 3. ENCONTRAR E LER PLANILHA
+# ============================================================
+
+INPUT_FILE = find_input_table(INPUT_FOLDER)
+print(f"\nArquivo selecionado: {os.path.basename(INPUT_FILE)}")
+
+df = read_table(INPUT_FILE)
+print(f"Número de linhas: {len(df)}")
+print(f"Número de colunas: {len(df.columns)}")
+
+required_columns = ["site", "compound", "pose_ID", "affinity"]
+missing = [c for c in required_columns if c not in df.columns]
+if missing:
+    raise ValueError(f"Colunas obrigatórias ausentes: {missing}")
+
+residue_pairs = detect_residue_pairs(df)
+
+print("\nPares de colunas detectados:")
+for _, rcol, ccol in residue_pairs:
+    print(f" - {rcol} / {ccol}")
+
+# ============================================================
+# 4. TABELA LONG-FORM
+# ============================================================
+
+long_df = build_long_table(df, residue_pairs)
+
+LONG_CSV = os.path.join(OUTPUT_FOLDER, "residue_contacts_long.csv")
+long_df.to_csv(LONG_CSV, index=False)
+
+print(f"\nTotal de interações extraídas: {len(long_df)}")
+print(f"Sites encontrados: {long_df['site'].nunique()}")
+print(f"Compostos encontrados: {long_df['compound'].nunique()}")
+print(f"Tabela long salva em: {LONG_CSV}")
+
+# ============================================================
+# 5. GERAR UM GRÁFICO PARA CADA SITE
+# ============================================================
+
+rng = np.random.default_rng(RANDOM_SEED)
+
+all_sites = [s for s in long_df["site"].dropna().unique()]
+all_sites = sorted(all_sites, key=lambda x: str(x))
+
+all_contacts_min = long_df["contacts"].min()
+all_contacts_max = long_df["contacts"].max()
+
+generated_files = []
+
+for site_name in all_sites:
+    site_df = long_df[long_df["site"] == site_name].copy()
+
+    if site_df.empty:
+        continue
+
+    # Ordem dos resíduos:
+    # 1) maior frequência
+    # 2) menor número do resíduo
+    residue_frequency = site_df["residue"].value_counts()
+
+    residues = sorted(
+        residue_frequency.index,
+        key=lambda r: (-residue_frequency[r], residue_number(r), str(r))
+    )
+
+    residue_to_y = {res: i for i, res in enumerate(residues)}
+    site_df["y"] = site_df["residue"].map(residue_to_y)
+
+    # Ordem e offsets dos compostos
+    compounds_here = get_compound_order(site_df["compound"].unique().tolist())
+    n_compounds = max(len(compounds_here), 1)
+
+    if n_compounds == 1:
+        offsets = {compounds_here[0]: 0.0}
+    else:
+        centered_positions = np.linspace(
+            -COMPOUND_VERTICAL_SPACING * (n_compounds - 1) / 2,
+             COMPOUND_VERTICAL_SPACING * (n_compounds - 1) / 2,
+             n_compounds
+        )
+        offsets = {comp: off for comp, off in zip(compounds_here, centered_positions)}
+
+    site_df["compound_offset"] = site_df["compound"].map(offsets).fillna(0.0)
+    site_df["y_jitter"] = (
+        site_df["y"]
+        + site_df["compound_offset"]
+        + rng.uniform(-RANDOM_Y_JITTER, RANDOM_Y_JITTER, size=len(site_df))
+    )
+
+    # Tamanho das bolhas
+    site_df["bubble_size"] = bubble_size_scale(
+        site_df["contacts"].values,
+        vmin=all_contacts_min,
+        vmax=all_contacts_max
+    )
+
+    fig_height = max(MIN_FIG_HEIGHT, len(residues) * HEIGHT_PER_RESIDUE)
+    fig, ax = plt.subplots(figsize=(FIG_WIDTH, fig_height), facecolor="white")
+    ax.set_facecolor("white")
+
+    # Plot por composto para controlar cores e legenda
+    for comp in compounds_here:
+        sub = site_df[site_df["compound"] == comp].copy()
+        if sub.empty:
+            continue
+
+        color = COMPOUND_COLORS.get(comp, "#7f7f7f")
+
+        ax.scatter(
+            sub["affinity"],
+            sub["y_jitter"],
+            s=sub["bubble_size"],
+            c=color,
+            alpha=POINT_ALPHA,
+            edgecolors=POINT_EDGECOLOR,
+            linewidths=POINT_EDGEWIDTH,
+            label=comp
+        )
+
+    # Eixo Y
+    ax.set_yticks(range(len(residues)))
+    ax.set_yticklabels(residues)
+    ax.invert_yaxis()
+
+    # Labels/título
+    ax.set_xlabel("Binding affinity (kcal/mol)")
+    ax.set_ylabel("Residue")
+    ax.set_title(f"Pose–residue contact distribution\nSite: {site_name}", pad=16)
+
+    # Grid e bordas
+    ax.grid(axis="x", linestyle="--", linewidth=0.8, alpha=0.35)
+    ax.grid(axis="y", visible=False)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    # Inverter eixo X se desejado
+    if REVERSE_X_AXIS:
+        ax.invert_xaxis()
+
+    # Margens leves no X
+    xmin = site_df["affinity"].min()
+    xmax = site_df["affinity"].max()
+    xpad = max((xmax - xmin) * 0.05, 0.2)
+    ax.set_xlim(xmin - xpad, xmax + xpad)
+
+    # -------- Legenda dos compostos --------
+    compound_handles = []
+    for comp in compounds_here:
+        color = COMPOUND_COLORS.get(comp, "#7f7f7f")
+        handle = Line2D(
+            [0], [0],
+            marker="o",
+            color="none",
+            markerfacecolor=color,
+            markeredgecolor=POINT_EDGECOLOR,
+            markeredgewidth=POINT_EDGEWIDTH,
+            markersize=9,
+            alpha=POINT_ALPHA,
+            label=comp
+        )
+        compound_handles.append(handle)
+
+    legend1 = ax.legend(
+        handles=compound_handles,
+        title="Compounds",
+        title_fontsize=LEGEND_TITLE_SIZE,
+        fontsize=LEGEND_TEXT_SIZE,
+        loc="upper right",
+        frameon=False
+    )
+
+    ax.add_artist(legend1)
+
+    # -------- Legenda de tamanho (contatos) --------
+    size_values = make_size_legend_values(site_df["contacts"].values)
+    size_handles = []
+
+    for val in size_values:
+        size_marker = bubble_size_scale(
+            np.array([val]),
+            vmin=all_contacts_min,
+            vmax=all_contacts_max
+        )[0]
+
+        # conversão aproximada da área (scatter) para markersize da legenda
+        ms = np.sqrt(size_marker)
+
+        size_handles.append(
+            Line2D(
+                [0], [0],
+                marker="o",
+                color="none",
+                markerfacecolor="#9e9e9e",
+                markeredgecolor="black",
+                markeredgewidth=0.6,
+                markersize=ms,
+                label=str(int(val)),
+                alpha=0.7
+            )
+        )
+
+    legend2 = ax.legend(
+        handles=size_handles,
+        title="Number of contacts",
+        title_fontsize=LEGEND_TITLE_SIZE,
+        fontsize=LEGEND_TEXT_SIZE,
+        loc="lower right",
+        frameon=False
+    )
+
+    ax.add_artist(legend2)
+
+    plt.tight_layout()
+
+    safe_site = sanitize_filename(site_name)
+    png_file = os.path.join(OUTPUT_FOLDER, f"{safe_site}_pose_residue_contacts.png")
+    svg_file = os.path.join(OUTPUT_FOLDER, f"{safe_site}_pose_residue_contacts.svg")
+    csv_file = os.path.join(OUTPUT_FOLDER, f"{safe_site}_pose_residue_contacts_long.csv")
+
+    site_df.to_csv(csv_file, index=False)
+
+    plt.savefig(png_file, dpi=600, bbox_inches="tight", facecolor="white")
+    plt.savefig(svg_file, bbox_inches="tight", facecolor="white")
+    plt.show()
+    plt.close()
+
+    generated_files.extend([png_file, svg_file, csv_file])
+
+    print(f"\nSite processado: {site_name}")
+    print(f" - PNG: {png_file}")
+    print(f" - SVG: {svg_file}")
+    print(f" - CSV: {csv_file}")
+
+# ============================================================
+# 6. RESUMO FINAL
+# ============================================================
+
+print("\n============================================================")
+print("Arquivos gerados:")
+print("============================================================")
+print(LONG_CSV)
+for f in generated_files:
+    print(f)
