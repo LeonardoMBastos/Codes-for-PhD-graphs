@@ -1,18 +1,18 @@
 # ============================================================
 # POSE–RESIDUE CONTACT DISTRIBUTION BY SITE
-# Adaptado para nova planilha
+# Versão corrigida conforme solicitado:
+#
+# CORREÇÕES:
+# 1) Legenda de compounds FORA do gráfico
+# 2) Legenda de contacts FORA do gráfico
+# 3) Bolinhas exatamente na mesma linha do resíduo
+#    (sem banda vertical / sem jitter vertical)
 #
 # Gera um gráfico para cada site:
 # X     = affinity
 # Y     = residue
 # Cor   = compound
 # Tamanho da bolha = número de contatos
-#
-# Regras:
-# - resíduos compartilhados por diferentes compostos ficam
-#   na mesma linha do eixo Y
-# - não usa mais degradê para contatos
-# - gera 1 figura por site
 #
 # Compatível com Google Colab
 # ============================================================
@@ -33,47 +33,39 @@ INPUT_FOLDER = "/content"
 OUTPUT_FOLDER = "/content/site_residue_plots"
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-RANDOM_SEED = 42
-
-# ----- Aparência geral -----
+# Aparência geral
 FIG_WIDTH = 18
 MIN_FIG_HEIGHT = 8
 HEIGHT_PER_RESIDUE = 0.55
 
-TITLE_SIZE = 24
-AXIS_LABEL_SIZE = 20
-TICK_LABEL_SIZE_X = 15
-TICK_LABEL_SIZE_Y = 14
-LEGEND_TITLE_SIZE = 14
-LEGEND_TEXT_SIZE = 13
+TITLE_SIZE = 22
+AXIS_LABEL_SIZE = 18
+TICK_LABEL_SIZE_X = 14
+TICK_LABEL_SIZE_Y = 13
+LEGEND_TITLE_SIZE = 13
+LEGEND_TEXT_SIZE = 12
 
 POINT_ALPHA = 0.60
-POINT_EDGEWIDTH = 0.6
+POINT_EDGEWIDTH = 0.55
 POINT_EDGECOLOR = "black"
 
-# Tamanho das bolhas (baseado em número de contatos)
+# Tamanho das bolhas
 MIN_BUBBLE_SIZE = 30
 MAX_BUBBLE_SIZE = 300
 
-# Pequeno deslocamento vertical por composto para ajudar
-# a visualizar compostos diferentes no mesmo resíduo
-COMPOUND_VERTICAL_SPACING = 0.14
-RANDOM_Y_JITTER = 0.025
-
-# Defina True se quiser inverter o eixo X
-# (afinidades mais negativas à direita, como no gráfico anexado)
+# Se quiser inverter o eixo X (afinidades mais negativas à direita)
 REVERSE_X_AXIS = False
 
-# Cores baseadas no gráfico de referência
+# Cores baseadas na imagem de referência
 COMPOUND_COLORS = {
     "DZP":  "#c5b3d6",  # lilás
-    "PHB":  "#d59a1a",  # laranja/mostarda
+    "PHB":  "#d59a1a",  # mostarda/laranja
     "GABA": "#c44e4e",  # vermelho
     "LIN":  "#86c88a",  # verde
     "NER":  "#8fb5da",  # azul
 }
 
-# Ordem preferencial na legenda
+# Ordem preferencial da legenda
 COMPOUND_ORDER = ["DZP", "PHB", "GABA", "LIN", "NER"]
 
 plt.rcParams.update({
@@ -106,9 +98,7 @@ def normalize_columns(df):
 
 def find_input_table(input_folder):
     candidates = []
-    patterns = ["*.csv", "*.xlsx", "*.xls"]
-
-    for pattern in patterns:
+    for pattern in ["*.csv", "*.xlsx", "*.xls"]:
         candidates.extend(glob.glob(os.path.join(input_folder, pattern)))
 
     if not candidates:
@@ -222,8 +212,8 @@ def build_long_table(df, residue_pairs):
 
     long_df = long_df.dropna(subset=["site", "compound", "pose_ID", "affinity", "residue", "contacts"])
 
-    # Se, por alguma razão, o mesmo resíduo aparecer repetido
-    # na mesma pose/composto, agregamos somando os contatos
+    # Se o mesmo resíduo aparecer repetido dentro da mesma pose/composto,
+    # agregamos somando os contatos
     long_df = (
         long_df
         .groupby(["site", "compound", "pose_ID", "affinity", "residue"], as_index=False)
@@ -312,8 +302,6 @@ print(f"Tabela long salva em: {LONG_CSV}")
 # 5. GERAR UM GRÁFICO PARA CADA SITE
 # ============================================================
 
-rng = np.random.default_rng(RANDOM_SEED)
-
 all_sites = [s for s in long_df["site"].dropna().unique()]
 all_sites = sorted(all_sites, key=lambda x: str(x))
 
@@ -328,9 +316,7 @@ for site_name in all_sites:
     if site_df.empty:
         continue
 
-    # Ordem dos resíduos:
-    # 1) maior frequência
-    # 2) menor número do resíduo
+    # Ordem dos resíduos por frequência e, em seguida, número do resíduo
     residue_frequency = site_df["residue"].value_counts()
 
     residues = sorted(
@@ -341,39 +327,30 @@ for site_name in all_sites:
     residue_to_y = {res: i for i, res in enumerate(residues)}
     site_df["y"] = site_df["residue"].map(residue_to_y)
 
-    # Ordem e offsets dos compostos
-    compounds_here = get_compound_order(site_df["compound"].unique().tolist())
-    n_compounds = max(len(compounds_here), 1)
+    # ========================================================
+    # CORREÇÃO 3:
+    # todas as bolinhas ficam exatamente na mesma linha do resíduo
+    # sem jitter vertical e sem banda por composto
+    # ========================================================
+    site_df["y_plot"] = site_df["y"]
 
-    if n_compounds == 1:
-        offsets = {compounds_here[0]: 0.0}
-    else:
-        centered_positions = np.linspace(
-            -COMPOUND_VERTICAL_SPACING * (n_compounds - 1) / 2,
-             COMPOUND_VERTICAL_SPACING * (n_compounds - 1) / 2,
-             n_compounds
-        )
-        offsets = {comp: off for comp, off in zip(compounds_here, centered_positions)}
-
-    site_df["compound_offset"] = site_df["compound"].map(offsets).fillna(0.0)
-    site_df["y_jitter"] = (
-        site_df["y"]
-        + site_df["compound_offset"]
-        + rng.uniform(-RANDOM_Y_JITTER, RANDOM_Y_JITTER, size=len(site_df))
-    )
-
-    # Tamanho das bolhas
+    # Tamanho das bolhas por número de contatos
     site_df["bubble_size"] = bubble_size_scale(
         site_df["contacts"].values,
         vmin=all_contacts_min,
         vmax=all_contacts_max
     )
 
+    compounds_here = get_compound_order(site_df["compound"].unique().tolist())
+
     fig_height = max(MIN_FIG_HEIGHT, len(residues) * HEIGHT_PER_RESIDUE)
     fig, ax = plt.subplots(figsize=(FIG_WIDTH, fig_height), facecolor="white")
     ax.set_facecolor("white")
 
-    # Plot por composto para controlar cores e legenda
+    # Reservar espaço à direita para as legendas fora do gráfico
+    fig.subplots_adjust(right=0.78)
+
+    # Plot por composto
     for comp in compounds_here:
         sub = site_df[site_df["compound"] == comp].copy()
         if sub.empty:
@@ -383,7 +360,7 @@ for site_name in all_sites:
 
         ax.scatter(
             sub["affinity"],
-            sub["y_jitter"],
+            sub["y_plot"],
             s=sub["bubble_size"],
             c=color,
             alpha=POINT_ALPHA,
@@ -398,9 +375,9 @@ for site_name in all_sites:
     ax.invert_yaxis()
 
     # Labels/título
-    ax.set_xlabel("Binding affinity (kcal/mol)")
-    ax.set_ylabel("Residue")
-    ax.set_title(f"Pose–residue contact distribution\nSite: {site_name}", pad=16)
+    ax.set_xlabel("Binding affinity (kcal/mol)", fontweight="bold")
+    ax.set_ylabel("Residue", fontweight="bold")
+    ax.set_title(f"Pose–residue contact distribution\nSite: {site_name}", pad=16, loc="left", fontweight="bold")
 
     # Grid e bordas
     ax.grid(axis="x", linestyle="--", linewidth=0.8, alpha=0.35)
@@ -412,13 +389,16 @@ for site_name in all_sites:
     if REVERSE_X_AXIS:
         ax.invert_xaxis()
 
-    # Margens leves no X
+    # Margens no X
     xmin = site_df["affinity"].min()
     xmax = site_df["affinity"].max()
     xpad = max((xmax - xmin) * 0.05, 0.2)
     ax.set_xlim(xmin - xpad, xmax + xpad)
 
-    # -------- Legenda dos compostos --------
+    # ========================================================
+    # CORREÇÃO 1:
+    # legenda de compounds FORA do gráfico
+    # ========================================================
     compound_handles = []
     for comp in compounds_here:
         color = COMPOUND_COLORS.get(comp, "#7f7f7f")
@@ -440,13 +420,17 @@ for site_name in all_sites:
         title="Compounds",
         title_fontsize=LEGEND_TITLE_SIZE,
         fontsize=LEGEND_TEXT_SIZE,
-        loc="upper right",
-        frameon=False
+        loc="upper left",
+        bbox_to_anchor=(1.01, 1.00),
+        frameon=False,
+        borderaxespad=0.0
     )
-
     ax.add_artist(legend1)
 
-    # -------- Legenda de tamanho (contatos) --------
+    # ========================================================
+    # CORREÇÃO 2:
+    # legenda de contacts FORA do gráfico
+    # ========================================================
     size_values = make_size_legend_values(site_df["contacts"].values)
     size_handles = []
 
@@ -457,7 +441,6 @@ for site_name in all_sites:
             vmax=all_contacts_max
         )[0]
 
-        # conversão aproximada da área (scatter) para markersize da legenda
         ms = np.sqrt(size_marker)
 
         size_handles.append(
@@ -465,27 +448,28 @@ for site_name in all_sites:
                 [0], [0],
                 marker="o",
                 color="none",
-                markerfacecolor="#9e9e9e",
+                markerfacecolor="#b0b0b0",
                 markeredgecolor="black",
                 markeredgewidth=0.6,
                 markersize=ms,
                 label=str(int(val)),
-                alpha=0.7
+                alpha=0.75
             )
         )
 
     legend2 = ax.legend(
         handles=size_handles,
-        title="Number of contacts",
+        title="Contacts",
         title_fontsize=LEGEND_TITLE_SIZE,
         fontsize=LEGEND_TEXT_SIZE,
-        loc="lower right",
-        frameon=False
+        loc="upper left",
+        bbox_to_anchor=(1.01, 0.52),
+        frameon=False,
+        borderaxespad=0.0
     )
-
     ax.add_artist(legend2)
 
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0, 0.78, 1])
 
     safe_site = sanitize_filename(site_name)
     png_file = os.path.join(OUTPUT_FOLDER, f"{safe_site}_pose_residue_contacts.png")
