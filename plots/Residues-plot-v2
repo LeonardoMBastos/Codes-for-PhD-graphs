@@ -2,12 +2,6 @@
 # POSE–RESIDUE CONTACT DISTRIBUTION BY SITE
 # Versão corrigida conforme solicitado:
 #
-# CORREÇÕES:
-# 1) Legenda de compounds FORA do gráfico
-# 2) Legenda de contacts FORA do gráfico
-# 3) Bolinhas exatamente na mesma linha do resíduo
-#    (sem banda vertical / sem jitter vertical)
-#
 # Gera um gráfico para cada site:
 # X     = affinity
 # Y     = residue
