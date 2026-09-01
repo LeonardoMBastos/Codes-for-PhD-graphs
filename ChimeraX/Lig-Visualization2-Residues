@@ -1,9 +1,96 @@
-~label
+# ============================================================
+# BINDING POCKET MINIMALISTA
+# #1 = RECEPTOR
+# #2 = LIGANTE
+# MOSTRAR APENAS INTERAÇÕES LIGANTE ↔ PROTEÍNA
+# ============================================================
+
+set bgColor white
+
+# ------------------------------------------------------------
+# 1. LIMPAR CENA
+# ------------------------------------------------------------
+~contacts
+~hbonds
+~select
+label delete
+
+hide #1 atoms
+hide #1 bonds
+hide #2 atoms
+hide #2 bonds
+surface close #1
+
+# ------------------------------------------------------------
+# 2. RECEPTOR (#1) - ESTILO FANTASMA
+# ------------------------------------------------------------
+show #1 cartoons
+color #1 #E8E8E8 cartoons
+transparency #1 58 target c
+
+surface #1
+color #1 #F3F3F3 surfaces
+transparency #1 88 target s
+
+# ------------------------------------------------------------
+# 3. LIGANTE (#2) - MAIS MINIMALISTA
+# ------------------------------------------------------------
+show #2 atoms
+show #2 bonds
+style #2 stick
+size #2 stickRadius 0.12
+color #2 #D96B6B atoms
+color #2 #D96B6B bonds
+
+# ------------------------------------------------------------
+# 4. IDENTIFICAR O BINDING POCKET
+# resíduos da proteína #1 até 4.5 Å do ligante #2
+# ------------------------------------------------------------
+select zone #2 4.5 (#1 & protein) residues true
+
+# ------------------------------------------------------------
+# 5. MOSTRAR RESÍDUOS DO POCKET
+# ------------------------------------------------------------
+show sel atoms
+show sel bonds
+style sel stick
+size sel stickRadius 0.10
+color sel #BDBDBD atoms
+color sel #BDBDBD bonds
+
+# ------------------------------------------------------------
+# 6. LABELS DOS RESÍDUOS
+# ------------------------------------------------------------
+label sel residues text "{0.name}{0.number}" color black height 1.0
+
+# ------------------------------------------------------------
+# 7. CONTATOS SOMENTE LIGANTE ↔ PROTEÍNA
+# ------------------------------------------------------------
+contacts #2 restrict (#1 & protein) interModel true intraModel false reveal false showDist false color #9A9A9A radius 0.035 name contacts
+
+# ------------------------------------------------------------
+# 8. H-BONDS SOMENTE LIGANTE ↔ PROTEÍNA
+# ------------------------------------------------------------
+hbonds #2 restrict (#1 & protein) interModel true intraModel false reveal false showDist false color #4C78A8 radius 0.055 name hbonds
+
+# ------------------------------------------------------------
+# 9. ESTILO DAS LINHAS DE INTERAÇÃO
+# ------------------------------------------------------------
+style contacts dashes 4
+style hbonds dashes 6
+
+# ------------------------------------------------------------
+# 10. REMOVER A SELEÇÃO VERDE
+# ------------------------------------------------------------
 ~select
 
-# seleciona resíduos da proteína em contato/proximidade com o ligante
-select zone #2 4.0 residue true
-select intersect sel #1
+# ------------------------------------------------------------
+# 11. VISUAL FINAL
+# ------------------------------------------------------------
+lighting soft
+graphics silhouettes true
+graphics silhouettes width 1
+graphics silhouettes color #777777
 
-# rotula somente os resíduos selecionados
-label sel residues text "{0.name}{0.number}" color black height 0.9
+view #2
+zoom 0.78
