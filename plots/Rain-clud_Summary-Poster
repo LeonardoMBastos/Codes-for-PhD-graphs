@@ -190,16 +190,19 @@ map_compound <- function(x) {
       "GABA",
 
     x2 %in% c(
-      "GER",
-      "GERANIOL"
-    ) ~ "GER",
+      "LIN",
+      "LINALOOL",
+      "LINALOL"
+    ) ~ "LIN",
 
     x2 %in% c(
-      "GERAC",
-      "GERANYL_ACETATE",
-      "GERANYL ACETATE",
-      "GERANYL-ACETATE"
-    ) ~ "GERAC",
+      "NER",
+      "NEROLIDOL",
+      "TRANS-NEROLIDOL",
+      "TRANS NEROLIDOL",
+      "TRANS_NEROLIDOL",
+      "TRANSNEROLIDOL"
+    ) ~ "NER",
 
     TRUE ~
       NA_character_
@@ -276,8 +279,8 @@ compound_order <- c(
   "DZP",
   "PHB",
   "GABA",
-  "GER",
-  "GERAC"
+  "LIN",
+  "NER"
 )
 
 site_order <- c(
@@ -323,11 +326,11 @@ df_plot$site_std <- factor(
 # ------------------------------------------------------------
 
 colors <- c(
-  "DZP"   = "#C06000",
+  "DZP"   = "#410257",
   "PHB"   = "#8C7D37",
-  "GABA"  = "#410257",
-  "GER"   = "#005A00",
-  "GERAC" = "#A00000"
+  "GABA"  = "#C06000",
+  "LIN"   = "#86c88a",
+  "NER"   = "#8fb5da"
 )
 
 
@@ -422,16 +425,16 @@ cloud_offset <- c(
   "DZP"   =  0.10,
   "PHB"   =  0.05,
   "GABA"  =  0.00,
-  "GER"   = -0.05,
-  "GERAC" = -0.10
+  "LIN"   = -0.05,
+  "NER"   = -0.10
 )
 
 box_offset <- c(
   "DZP"   =  0.070,
   "PHB"   =  0.035,
   "GABA"  =  0.000,
-  "GER"   = -0.035,
-  "GERAC" = -0.070
+  "LIN"   = -0.035,
+  "NER"   = -0.070
 )
 
 
