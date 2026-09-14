@@ -1,0 +1,3 @@
+cd ~/homo_lumo
+source .venv/bin/activate
+python homo_lumo.py
