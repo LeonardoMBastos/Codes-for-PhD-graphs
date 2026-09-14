@@ -1,0 +1,1199 @@
+# ================================================================
+# HOMO / LUMO WORKFLOW - GOOGLE COLAB
+# ================================================================
+#
+# INPUT:
+#   Arquivos .pdbqt arrastados para o ambiente do Google Colab
+#   Exemplo:
+#       LIN.pdbqt
+#       NER.pdbqt
+#
+# OUTPUT PARA CADA MOLÉCULA:
+#   *_MMFF94.sdf
+#   *_MMFF94.xyz
+#   *_DFTopt.xyz
+#   *_DFTopt.sdf
+#   *_HOMO.cube
+#   *_LUMO.cube
+#
+# OUTPUT GERAL:
+#   HOMO_LUMO_summary.csv
+#   HOMO_LUMO_results.zip
+#
+# MÉTODO:
+#   MMFF94 pre-optimization
+#   DFT geometry optimization: B3LYP/cc-pVDZ
+#   Single-point: B3LYP/cc-pVDZ
+#
+# Charge = 0
+# Multiplicidade = 1
+#
+# Apropriado para LIN e NER neutros.
+#
+# ================================================================
+
+
+# ================================================================
+# 0. CONFIGURAÇÕES
+# ================================================================
+
+RUN_DFT_GEOM_OPT = True
+
+# True  = MMFF94 -> DFT geometry optimization -> single point
+# False = MMFF94 -> single point
+#
+# False é muito mais rápido.
+# True é metodologicamente mais rigoroso.
+
+METHOD = "B3LYP"
+BASIS = "cc-pVDZ"
+
+CHARGE = 0
+
+# PySCF usa:
+# spin = número de elétrons alfa - número de elétrons beta
+# singlet closed-shell = 0
+SPIN = 0
+
+MMFF_STEPS = 5000
+
+# Número de pontos da grade do arquivo cube.
+# 70-80 é suficiente para figuras.
+CUBE_GRID = 80
+
+# Valor usado apenas para PREVIEW no Colab.
+# Não altera os dados contidos no arquivo cube.
+ISOVALUE = 0.03
+
+SHOW_PREVIEW = True
+
+# Se True, tentará iniciar download do ZIP automaticamente ao final.
+AUTO_DOWNLOAD_ZIP = False
+
+# Nível da grid numérica do DFT.
+# 3 é um bom equilíbrio entre precisão e custo.
+DFT_GRID_LEVEL = 3
+
+# Máximo de ciclos SCF
+SCF_MAX_CYCLES = 200
+
+# Máximo de passos de otimização geométrica
+GEOM_MAX_STEPS = 100
+
+
+# ================================================================
+# 1. INSTALAÇÃO AUTOMÁTICA
+# ================================================================
+
+import os
+import sys
+import subprocess
+import shutil
+import re
+import warnings
+from pathlib import Path
+
+warnings.filterwarnings("ignore")
+
+print("=" * 70)
+print("INSTALANDO DEPENDÊNCIAS")
+print("=" * 70)
+
+subprocess.run(
+    ["apt-get", "-qq", "update"],
+    check=True
+)
+
+subprocess.run(
+    ["apt-get", "-qq", "install", "-y", "openbabel"],
+    check=True
+)
+
+subprocess.run(
+    [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "-q",
+        "pyscf",
+        "geometric",
+        "py3Dmol",
+        "pandas"
+    ],
+    check=True
+)
+
+print("Dependências instaladas.\n")
+
+
+# ================================================================
+# 2. IMPORTAÇÕES
+# ================================================================
+
+import numpy as np
+import pandas as pd
+
+from pyscf import gto, dft, lib
+from pyscf.tools import cubegen
+from pyscf.geomopt.geometric_solver import optimize
+
+import py3Dmol
+
+from IPython.display import display, HTML
+
+try:
+    from google.colab import files
+    IN_COLAB = True
+except:
+    IN_COLAB = False
+
+
+# ================================================================
+# 3. CONFIGURAÇÃO DE CPU
+# ================================================================
+
+n_threads = min(4, os.cpu_count() or 2)
+
+lib.num_threads(n_threads)
+
+print(f"CPUs utilizadas pelo PySCF: {n_threads}")
+
+
+# ================================================================
+# 4. DIRETÓRIOS
+# ================================================================
+
+INPUT_DIR = Path("/content")
+
+OUTPUT_DIR = Path("/content/HOMO_LUMO_results")
+
+if OUTPUT_DIR.exists():
+    shutil.rmtree(OUTPUT_DIR)
+
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ================================================================
+# 5. FUNÇÕES AUXILIARES
+# ================================================================
+
+HARTREE_TO_EV = 27.211386245988
+
+
+def sanitize_name(name):
+    """
+    Remove caracteres problemáticos de nomes de arquivos.
+    """
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", name)
+
+
+def run_command(cmd):
+    """
+    Executa comando externo e retorna stdout/stderr.
+    """
+
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+
+    if result.returncode != 0:
+
+        print("\nERRO AO EXECUTAR:")
+        print(" ".join(cmd))
+
+        print("\nSTDOUT:")
+        print(result.stdout)
+
+        print("\nSTDERR:")
+        print(result.stderr)
+
+        raise RuntimeError(
+            "Falha ao executar comando externo."
+        )
+
+    return result
+
+
+def read_xyz(xyz_file):
+    """
+    Lê XYZ e retorna lista compatível com PySCF.
+    """
+
+    with open(xyz_file, "r") as f:
+        lines = f.readlines()
+
+    natoms = int(lines[0].strip())
+
+    atoms = []
+
+    for line in lines[2:2 + natoms]:
+
+        parts = line.split()
+
+        if len(parts) < 4:
+            continue
+
+        symbol = parts[0]
+
+        x = float(parts[1])
+        y = float(parts[2])
+        z = float(parts[3])
+
+        atoms.append(
+            (
+                symbol,
+                (x, y, z)
+            )
+        )
+
+    return atoms
+
+
+def write_xyz(mol, filename, comment="DFT optimized structure"):
+    """
+    Escreve estrutura PySCF como XYZ em Angstrom.
+    """
+
+    coords = mol.atom_coords(unit="Angstrom")
+
+    with open(filename, "w") as f:
+
+        f.write(f"{mol.natm}\n")
+        f.write(comment + "\n")
+
+        for i in range(mol.natm):
+
+            symbol = mol.atom_symbol(i)
+
+            x, y, z = coords[i]
+
+            f.write(
+                f"{symbol:3s} "
+                f"{x:16.8f} "
+                f"{y:16.8f} "
+                f"{z:16.8f}\n"
+            )
+
+
+def build_rks(mol, chkfile=None):
+    """
+    Cria objeto DFT/RKS com configurações padronizadas.
+    """
+
+    mf = dft.RKS(mol)
+
+    mf.xc = METHOD.lower()
+
+    mf.grids.level = DFT_GRID_LEVEL
+
+    mf.conv_tol = 1e-8
+
+    mf.max_cycle = SCF_MAX_CYCLES
+
+    if chkfile is not None:
+        mf.chkfile = str(chkfile)
+
+    return mf
+
+
+def run_scf_robust(mol, chkfile=None):
+    """
+    Executa SCF.
+    Se o SCF convencional não convergir,
+    tenta Newton-Raphson.
+    """
+
+    mf = build_rks(
+        mol,
+        chkfile=chkfile
+    )
+
+    energy = mf.kernel()
+
+    if not mf.converged:
+
+        print(
+            "SCF convencional não convergiu. "
+            "Tentando Newton solver..."
+        )
+
+        mf = mf.newton()
+
+        mf.max_cycle = SCF_MAX_CYCLES
+
+        energy = mf.kernel()
+
+    if not mf.converged:
+
+        raise RuntimeError(
+            "SCF não convergiu mesmo após Newton solver."
+        )
+
+    return mf, energy
+
+
+def preview_orbital(
+    sdf_file,
+    cube_file,
+    title,
+    isovalue=0.03
+):
+    """
+    Mostra HOMO/LUMO interativamente no Google Colab.
+
+    Verde = fase positiva de psi
+    Vermelho = fase negativa de psi
+
+    IMPORTANTE:
+    Essas cores NÃO representam carga positiva/negativa.
+    """
+
+    if not SHOW_PREVIEW:
+        return
+
+    try:
+
+        with open(sdf_file, "r") as f:
+            sdf_data = f.read()
+
+        with open(cube_file, "r") as f:
+            cube_data = f.read()
+
+        display(
+            HTML(
+                f"""
+                <h3 style="font-family:Arial">
+                {title}
+                </h3>
+                """
+            )
+        )
+
+        view = py3Dmol.view(
+            width=700,
+            height=500
+        )
+
+        view.addModel(
+            sdf_data,
+            "sdf"
+        )
+
+        view.setStyle(
+            {
+                "stick": {
+                    "radius": 0.12
+                },
+                "sphere": {
+                    "scale": 0.20
+                }
+            }
+        )
+
+        # Fase positiva
+        view.addVolumetricData(
+            cube_data,
+            "cube",
+            {
+                "isoval": float(isovalue),
+                "color": "green",
+                "opacity": 0.70
+            }
+        )
+
+        # Fase negativa
+        view.addVolumetricData(
+            cube_data,
+            "cube",
+            {
+                "isoval": -float(isovalue),
+                "color": "red",
+                "opacity": 0.70
+            }
+        )
+
+        view.setBackgroundColor("white")
+
+        view.zoomTo()
+
+        view.show()
+
+    except Exception as exc:
+
+        print(
+            f"Preview não pôde ser criado: {exc}"
+        )
+
+
+# ================================================================
+# 6. DETECÇÃO AUTOMÁTICA DOS ARQUIVOS PDBQT
+# ================================================================
+
+pdbqt_files = []
+
+for path in INPUT_DIR.rglob("*.pdbqt"):
+
+    # Ignorar qualquer arquivo eventualmente dentro
+    # da pasta de resultados.
+    if OUTPUT_DIR in path.parents:
+        continue
+
+    pdbqt_files.append(path)
+
+pdbqt_files = sorted(pdbqt_files)
+
+
+# Se nenhum arquivo foi encontrado, abrir upload convencional.
+if len(pdbqt_files) == 0:
+
+    print("\nNenhum arquivo .pdbqt encontrado em /content.")
+
+    if IN_COLAB:
+
+        print(
+            "Selecione os arquivos .pdbqt abaixo "
+            "ou arraste-os para o painel Files do Colab."
+        )
+
+        uploaded = files.upload()
+
+        pdbqt_files = sorted(
+            INPUT_DIR.glob("*.pdbqt")
+        )
+
+    else:
+
+        raise FileNotFoundError(
+            "Nenhum PDBQT encontrado."
+        )
+
+
+if len(pdbqt_files) == 0:
+
+    raise FileNotFoundError(
+        "Nenhum arquivo .pdbqt foi carregado."
+    )
+
+
+print("\n" + "=" * 70)
+print("ARQUIVOS PDBQT ENCONTRADOS")
+print("=" * 70)
+
+for f in pdbqt_files:
+    print(" •", f.name)
+
+print(
+    f"\nTotal: {len(pdbqt_files)} arquivo(s)\n"
+)
+
+
+# ================================================================
+# 7. PROCESSAMENTO DAS MOLÉCULAS
+# ================================================================
+
+results = []
+
+generated_for_preview = []
+
+
+for pdbqt_file in pdbqt_files:
+
+    original_name = pdbqt_file.stem
+
+    compound = sanitize_name(original_name)
+
+    compound_dir = OUTPUT_DIR / compound
+
+    compound_dir.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    print("\n")
+    print("=" * 70)
+    print(f"PROCESSANDO: {original_name}")
+    print("=" * 70)
+
+
+    # ------------------------------------------------------------
+    # 7.1 PDBQT -> SDF + H + MMFF94
+    # ------------------------------------------------------------
+
+    mmff_sdf = compound_dir / f"{compound}_MMFF94.sdf"
+
+    print("\n[1/7] PDBQT -> SDF + hidrogênios + MMFF94")
+
+    cmd_mmff = [
+        "obabel",
+        str(pdbqt_file),
+
+        # Caso o PDBQT contenha múltiplos MODEL,
+        # usa apenas a primeira estrutura.
+        "-f", "1",
+        "-l", "1",
+
+        "-O",
+        str(mmff_sdf),
+
+        "-h",
+
+        "--minimize",
+        "--ff",
+        "MMFF94",
+
+        "--steps",
+        str(MMFF_STEPS)
+    ]
+
+    mmff_ok = True
+
+    try:
+
+        run_command(cmd_mmff)
+
+    except Exception:
+
+        mmff_ok = False
+
+
+    # ------------------------------------------------------------
+    # Fallback para UFF, caso MMFF94 não reconheça atom types
+    # ------------------------------------------------------------
+
+    if not mmff_ok:
+
+        print(
+            "MMFF94 falhou. "
+            "Tentando UFF como fallback..."
+        )
+
+        cmd_uff = [
+            "obabel",
+            str(pdbqt_file),
+            "-f", "1",
+            "-l", "1",
+            "-O",
+            str(mmff_sdf),
+            "-h",
+            "--minimize",
+            "--ff",
+            "UFF",
+            "--steps",
+            str(MMFF_STEPS)
+        ]
+
+        run_command(cmd_uff)
+
+        preoptimization_method = "UFF"
+
+    else:
+
+        preoptimization_method = "MMFF94"
+
+
+    # ------------------------------------------------------------
+    # 7.2 SDF -> XYZ
+    # ------------------------------------------------------------
+
+    mmff_xyz = compound_dir / f"{compound}_MMFF94.xyz"
+
+    print("[2/7] Convertendo estrutura pré-otimizada para XYZ")
+
+    run_command(
+        [
+            "obabel",
+            str(mmff_sdf),
+            "-O",
+            str(mmff_xyz)
+        ]
+    )
+
+
+    # ------------------------------------------------------------
+    # 7.3 Criar molécula PySCF
+    # ------------------------------------------------------------
+
+    print("[3/7] Preparando cálculo quântico")
+
+    atoms = read_xyz(mmff_xyz)
+
+    mol = gto.M(
+        atom=atoms,
+        basis=BASIS,
+        charge=CHARGE,
+        spin=SPIN,
+        unit="Angstrom",
+        verbose=3
+    )
+
+    print(
+        f"   Átomos: {mol.natm}"
+    )
+
+    print(
+        f"   Elétrons: {mol.nelectron}"
+    )
+
+    print(
+        f"   Carga: {CHARGE}"
+    )
+
+    print(
+        f"   Multiplicidade: {SPIN + 1}"
+    )
+
+
+    # Verificação simples
+    if mol.nelectron % 2 != 0 and SPIN == 0:
+
+        raise ValueError(
+            f"{compound}: número ímpar de elétrons "
+            "para cálculo closed-shell."
+        )
+
+
+    # ------------------------------------------------------------
+    # 7.4 Otimização geométrica DFT
+    # ------------------------------------------------------------
+
+    geometry_source = preoptimization_method
+
+    if RUN_DFT_GEOM_OPT:
+
+        print("\n[4/7] Otimização geométrica DFT")
+        print(
+            f"      {METHOD}/{BASIS}"
+        )
+
+        try:
+
+            mf_opt = build_rks(mol)
+
+            # geomeTRIC usa as energias e gradientes do PySCF.
+            optimized_mol = optimize(
+                mf_opt,
+                maxsteps=GEOM_MAX_STEPS
+            )
+
+            mol_final = optimized_mol
+
+            geometry_source = (
+                f"{preoptimization_method} + "
+                f"{METHOD}/{BASIS} geometry optimization"
+            )
+
+            print(
+                "      Otimização geométrica concluída."
+            )
+
+        except Exception as exc:
+
+            print("\nATENÇÃO:")
+            print(
+                "Otimização geométrica DFT não foi concluída."
+            )
+
+            print(
+                f"Motivo: {exc}"
+            )
+
+            print(
+                "O cálculo continuará utilizando "
+                f"a geometria {preoptimization_method}."
+            )
+
+            mol_final = mol
+
+    else:
+
+        print("\n[4/7] Otimização DFT DESATIVADA")
+        print(
+            f"      Utilizando geometria {preoptimization_method}."
+        )
+
+        mol_final = mol
+
+
+    # ------------------------------------------------------------
+    # 7.5 Salvar geometria final
+    # ------------------------------------------------------------
+
+    opt_xyz = compound_dir / f"{compound}_DFTopt.xyz"
+
+    write_xyz(
+        mol_final,
+        opt_xyz,
+        comment=geometry_source
+    )
+
+    opt_sdf = compound_dir / f"{compound}_DFTopt.sdf"
+
+    run_command(
+        [
+            "obabel",
+            str(opt_xyz),
+            "-O",
+            str(opt_sdf)
+        ]
+    )
+
+
+    # ------------------------------------------------------------
+    # 7.6 Single-point DFT FINAL
+    # ------------------------------------------------------------
+
+    print("\n[5/7] Single-point DFT final")
+    print(
+        f"      {METHOD}/{BASIS}"
+    )
+
+    chkfile = compound_dir / f"{compound}.chk"
+
+    mf_final, total_energy = run_scf_robust(
+        mol_final,
+        chkfile=chkfile
+    )
+
+
+    # ------------------------------------------------------------
+    # Identificar HOMO e LUMO
+    # ------------------------------------------------------------
+
+    occupations = np.asarray(
+        mf_final.mo_occ
+    )
+
+    energies = np.asarray(
+        mf_final.mo_energy
+    )
+
+    occupied_indices = np.where(
+        occupations > 0
+    )[0]
+
+    virtual_indices = np.where(
+        occupations == 0
+    )[0]
+
+
+    if len(occupied_indices) == 0:
+        raise RuntimeError(
+            "Nenhum orbital ocupado encontrado."
+        )
+
+    if len(virtual_indices) == 0:
+        raise RuntimeError(
+            "Nenhum orbital virtual encontrado."
+        )
+
+
+    homo_idx = occupied_indices[-1]
+
+    lumo_candidates = virtual_indices[
+        virtual_indices > homo_idx
+    ]
+
+    if len(lumo_candidates) == 0:
+        raise RuntimeError(
+            "Não foi possível localizar LUMO."
+        )
+
+    lumo_idx = lumo_candidates[0]
+
+
+    homo_hartree = float(
+        energies[homo_idx]
+    )
+
+    lumo_hartree = float(
+        energies[lumo_idx]
+    )
+
+
+    homo_ev = (
+        homo_hartree *
+        HARTREE_TO_EV
+    )
+
+    lumo_ev = (
+        lumo_hartree *
+        HARTREE_TO_EV
+    )
+
+    gap_hartree = (
+        lumo_hartree -
+        homo_hartree
+    )
+
+    gap_ev = (
+        gap_hartree *
+        HARTREE_TO_EV
+    )
+
+
+    print("\n" + "-" * 50)
+
+    print(
+        f"HOMO orbital #: {homo_idx + 1}"
+    )
+
+    print(
+        f"LUMO orbital #: {lumo_idx + 1}"
+    )
+
+    print(
+        f"HOMO = {homo_hartree:.8f} Hartree "
+        f"= {homo_ev:.4f} eV"
+    )
+
+    print(
+        f"LUMO = {lumo_hartree:.8f} Hartree "
+        f"= {lumo_ev:.4f} eV"
+    )
+
+    print(
+        f"HOMO-LUMO gap = {gap_ev:.4f} eV"
+    )
+
+    print("-" * 50)
+
+
+    # ------------------------------------------------------------
+    # 7.7 Criar arquivos CUBE
+    # ------------------------------------------------------------
+
+    print("\n[6/7] Gerando arquivos .cube")
+
+    homo_cube = (
+        compound_dir /
+        f"{compound}_HOMO.cube"
+    )
+
+    lumo_cube = (
+        compound_dir /
+        f"{compound}_LUMO.cube"
+    )
+
+
+    cubegen.orbital(
+        mol_final,
+        str(homo_cube),
+        mf_final.mo_coeff[:, homo_idx],
+        nx=CUBE_GRID,
+        ny=CUBE_GRID,
+        nz=CUBE_GRID
+    )
+
+
+    cubegen.orbital(
+        mol_final,
+        str(lumo_cube),
+        mf_final.mo_coeff[:, lumo_idx],
+        nx=CUBE_GRID,
+        ny=CUBE_GRID,
+        nz=CUBE_GRID
+    )
+
+
+    print(
+        f"      HOMO: {homo_cube.name}"
+    )
+
+    print(
+        f"      LUMO: {lumo_cube.name}"
+    )
+
+
+    # ------------------------------------------------------------
+    # Registrar resultados
+    # ------------------------------------------------------------
+
+    results.append(
+        {
+            "compound": original_name,
+
+            "preoptimization": preoptimization_method,
+
+            "geometry": geometry_source,
+
+            "DFT_method": METHOD,
+
+            "basis_set": BASIS,
+
+            "charge": CHARGE,
+
+            "multiplicity": SPIN + 1,
+
+            "number_atoms": mol_final.natm,
+
+            "number_electrons": mol_final.nelectron,
+
+            "total_energy_Hartree": total_energy,
+
+            "HOMO_orbital": homo_idx + 1,
+
+            "LUMO_orbital": lumo_idx + 1,
+
+            "HOMO_Hartree": homo_hartree,
+
+            "LUMO_Hartree": lumo_hartree,
+
+            "HOMO_eV": homo_ev,
+
+            "LUMO_eV": lumo_ev,
+
+            "HOMO_LUMO_gap_Hartree": gap_hartree,
+
+            "HOMO_LUMO_gap_eV": gap_ev,
+
+            "HOMO_cube": homo_cube.name,
+
+            "LUMO_cube": lumo_cube.name
+        }
+    )
+
+
+    generated_for_preview.append(
+        {
+            "compound": original_name,
+            "sdf": opt_sdf,
+            "homo": homo_cube,
+            "lumo": lumo_cube
+        }
+    )
+
+
+    print("\n[7/7] Concluído:")
+    print(f"      {original_name}")
+
+
+# ================================================================
+# 8. TABELA FINAL
+# ================================================================
+
+results_df = pd.DataFrame(results)
+
+summary_csv = (
+    OUTPUT_DIR /
+    "HOMO_LUMO_summary.csv"
+)
+
+results_df.to_csv(
+    summary_csv,
+    index=False
+)
+
+
+print("\n\n")
+print("=" * 70)
+print("RESULTADOS HOMO / LUMO")
+print("=" * 70)
+
+display(
+    results_df[
+        [
+            "compound",
+            "HOMO_eV",
+            "LUMO_eV",
+            "HOMO_LUMO_gap_eV"
+        ]
+    ].round(4)
+)
+
+
+# ================================================================
+# 9. PREVIEW 3D INTERATIVO
+# ================================================================
+
+if SHOW_PREVIEW:
+
+    print("\n")
+    print("=" * 70)
+    print("PREVIEW DOS ORBITAIS")
+    print("=" * 70)
+
+    print(
+        "\nVerde = +ψ | Vermelho = −ψ\n"
+        "As cores representam a FASE do orbital,\n"
+        "NÃO carga elétrica positiva/negativa.\n"
+    )
+
+
+    for item in generated_for_preview:
+
+        preview_orbital(
+            item["sdf"],
+            item["homo"],
+            f'{item["compound"]} — HOMO',
+            ISOVALUE
+        )
+
+        preview_orbital(
+            item["sdf"],
+            item["lumo"],
+            f'{item["compound"]} — LUMO',
+            ISOVALUE
+        )
+
+
+# ================================================================
+# 10. GERAR README
+# ================================================================
+
+readme_path = (
+    OUTPUT_DIR /
+    "README_HOMO_LUMO.txt"
+)
+
+with open(
+    readme_path,
+    "w",
+    encoding="utf-8"
+) as f:
+
+    f.write(
+f"""
+HOMO / LUMO CALCULATION
+=======================
+
+Electronic structure method:
+{METHOD}/{BASIS}
+
+Charge:
+{CHARGE}
+
+Multiplicity:
+{SPIN + 1}
+
+DFT geometry optimization:
+{RUN_DFT_GEOM_OPT}
+
+Workflow:
+PDBQT
+-> hydrogens added
+-> MMFF94 pre-optimization
+-> DFT geometry optimization (when enabled)
+-> {METHOD}/{BASIS} single-point
+-> HOMO/LUMO extraction
+-> Gaussian Cube generation
+
+CUBE FILES
+==========
+
+*_HOMO.cube
+    Highest Occupied Molecular Orbital
+
+*_LUMO.cube
+    Lowest Unoccupied Molecular Orbital
+
+
+VISUALIZATION
+=============
+
+Recommended isosurface:
+
++{ISOVALUE}
+-{ISOVALUE}
+
+For comparison between compounds,
+use exactly the SAME absolute isovalue.
+
+Suggested colors:
+
++psi = green
+-psi = red
+
+IMPORTANT:
+
+Positive and negative cube values correspond
+to opposite phases/signs of the molecular orbital
+wavefunction.
+
+They do NOT correspond directly to
+positive and negative electrostatic charge.
+
+
+HOMO-LUMO GAP
+=============
+
+Delta E = E(LUMO) - E(HOMO)
+
+Conversion:
+
+1 Hartree = {HARTREE_TO_EV} eV
+
+The numerical results are stored in:
+
+HOMO_LUMO_summary.csv
+"""
+    )
+
+
+# ================================================================
+# 11. ZIPAR TODOS OS RESULTADOS
+# ================================================================
+
+zip_base = "/content/HOMO_LUMO_results"
+
+zip_file = shutil.make_archive(
+    zip_base,
+    "zip",
+    root_dir=OUTPUT_DIR
+)
+
+
+print("\n")
+print("=" * 70)
+print("PROCESSAMENTO FINALIZADO")
+print("=" * 70)
+
+print(
+    f"\nTabela:\n{summary_csv}"
+)
+
+print(
+    f"\nResultados:\n{OUTPUT_DIR}"
+)
+
+print(
+    f"\nZIP:\n{zip_file}"
+)
+
+print(
+    "\nCada molécula possui sua própria pasta contendo:"
+)
+
+print(
+    "  • estrutura pré-otimizada"
+)
+
+print(
+    "  • estrutura final"
+)
+
+print(
+    "  • arquivo HOMO.cube"
+)
+
+print(
+    "  • arquivo LUMO.cube"
+)
+
+print(
+    "  • checkpoint PySCF"
+)
+
+
+# ================================================================
+# 12. DOWNLOAD AUTOMÁTICO OPCIONAL
+# ================================================================
+
+if AUTO_DOWNLOAD_ZIP and IN_COLAB:
+
+    files.download(
+        zip_file
+    )
