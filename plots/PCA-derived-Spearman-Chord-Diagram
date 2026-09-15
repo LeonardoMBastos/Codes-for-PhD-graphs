@@ -1,0 +1,2893 @@
+# ==============================================================================
+# CHORD DIAGRAM — PEARSON CORRELATION + PCA LOADING RINGS
+# ROBUST WINDOWS / RSTUDIO VERSION
+#
+# INPUT:
+#   PCA_complete_results.xlsx
+#
+# RIBBONS:
+#   Pearson correlation
+#   -1 = red
+#    0 = white
+#   +1 = blue
+#
+#   Ribbon width = |Pearson r|
+#
+# PCA RINGS:
+#   OUTER = PC1 loading
+#   INNER = PC2 loading
+#
+#   SAME GRADIENT:
+#   -1 = turquoise
+#    0 = white
+#   +1 = orange
+#
+# Only BH-FDR significant Pearson correlations are displayed.
+# ==============================================================================
+
+
+
+# ==============================================================================
+# 0. USER SETTINGS
+# ==============================================================================
+
+maximum_FDR <- 0.05
+
+# 0 = all FDR-significant correlations
+min_abs_correlation <- 0.00
+
+# Maximum number of residues/site
+top_n_residues <- 10
+
+# Precision after PCA reconstruction
+reconstruction_digits <- 12
+
+# Cross-device font
+font_family <- "sans"
+
+output_background <- "white"
+
+# PNG
+png_width  <- 4200
+png_height <- 3900
+png_res    <- 400
+
+# TIFF
+tiff_width  <- 6300
+tiff_height <- 5850
+tiff_res    <- 600
+
+
+
+# ==============================================================================
+# 1. PACKAGES
+# ==============================================================================
+
+required_packages <- c(
+  "circlize",
+  "openxlsx"
+)
+
+
+missing_packages <- required_packages[
+  !vapply(
+    required_packages,
+    requireNamespace,
+    logical(1),
+    quietly = TRUE
+  )
+]
+
+
+if (length(missing_packages) > 0) {
+  install.packages(missing_packages)
+}
+
+
+library(circlize)
+library(openxlsx)
+
+
+
+# ==============================================================================
+# 2. HELPER FUNCTIONS
+# ==============================================================================
+
+safe_num <- function(x) {
+
+  as.numeric(
+    gsub(
+      ",",
+      ".",
+      as.character(x),
+      fixed = TRUE
+    )
+  )
+
+}
+
+
+
+get_pc_columns <- function(df) {
+
+  pcs <- grep(
+    "^PC[0-9]+$",
+    names(df),
+    value = TRUE
+  )
+
+
+  pcs[
+    order(
+      as.integer(
+        sub(
+          "^PC",
+          "",
+          pcs
+        )
+      )
+    )
+  ]
+
+}
+
+
+
+get_variance_percent <- function(
+    variance_df,
+    site_name,
+    pc_name
+) {
+
+  idx <- which(
+    variance_df$site == site_name &
+      variance_df$PC == pc_name
+  )
+
+
+  if (length(idx) == 0) {
+    return(NA_real_)
+  }
+
+
+  safe_num(
+    variance_df$variance_percent[idx[1]]
+  )
+
+}
+
+
+
+make_gap_after <- function(
+    group_vector,
+    small_gap = 2.5,
+    large_gap = 11,
+    final_gap = 11
+) {
+
+  n <- length(group_vector)
+
+
+  if (n == 0) {
+    return(numeric(0))
+  }
+
+
+  gaps <- rep(
+    small_gap,
+    n
+  )
+
+
+  if (n > 1) {
+
+    changes <- which(
+      group_vector[-n] !=
+        group_vector[-1]
+    )
+
+
+    if (length(changes) > 0) {
+      gaps[changes] <- large_gap
+    }
+
+  }
+
+
+  gaps[n] <- final_gap
+
+
+  gaps
+
+}
+
+
+
+# ==============================================================================
+# 3. SAFE OUTPUT DIRECTORY
+# ==============================================================================
+
+create_safe_output_directory <- function(
+    input_file
+) {
+
+  source_directory <- dirname(
+    input_file
+  )
+
+
+  desired_directory <- file.path(
+    source_directory,
+    "Chord_Diagram_Output"
+  )
+
+
+  # ---------------------------------------------------------------------------
+  # Try creating standard output directory
+  # ---------------------------------------------------------------------------
+
+  dir.create(
+    desired_directory,
+    recursive = TRUE,
+    showWarnings = FALSE
+  )
+
+
+  # ---------------------------------------------------------------------------
+  # Test writing
+  # ---------------------------------------------------------------------------
+
+  test_file <- file.path(
+    desired_directory,
+    paste0(
+      "write_test_",
+      Sys.getpid(),
+      ".tmp"
+    )
+  )
+
+
+  can_write <- tryCatch(
+
+    {
+
+      created <- file.create(
+        test_file
+      )
+
+
+      if (isTRUE(created)) {
+
+        unlink(
+          test_file
+        )
+
+        TRUE
+
+      } else {
+
+        FALSE
+
+      }
+
+    },
+
+    error = function(e) {
+      FALSE
+    }
+
+  )
+
+
+  if (can_write) {
+
+    return(
+      normalizePath(
+        desired_directory,
+        winslash = "/",
+        mustWork = TRUE
+      )
+    )
+
+  }
+
+
+
+  # ---------------------------------------------------------------------------
+  # Windows fallback — ask user for another directory
+  # ---------------------------------------------------------------------------
+
+  if (.Platform$OS.type == "windows") {
+
+    warning(
+      paste0(
+        "The folder next to the Excel file is not writable.\n",
+        "Please choose another output folder."
+      )
+    )
+
+
+    selected_directory <- utils::choose.dir(
+
+      default =
+        source_directory,
+
+      caption =
+        "Choose folder for Chord Diagram outputs"
+
+    )
+
+
+    if (
+      is.na(
+        selected_directory
+      ) ||
+        selected_directory == ""
+    ) {
+
+      stop(
+        "No writable output directory was selected.",
+        call. = FALSE
+      )
+
+    }
+
+
+    desired_directory <- file.path(
+      selected_directory,
+      "Chord_Diagram_Output"
+    )
+
+
+    dir.create(
+      desired_directory,
+      recursive = TRUE,
+      showWarnings = FALSE
+    )
+
+
+    test_file <- file.path(
+      desired_directory,
+      "write_test.tmp"
+    )
+
+
+    if (
+      !isTRUE(
+        file.create(
+          test_file
+        )
+      )
+    ) {
+
+      stop(
+        paste0(
+          "R still cannot write to:\n",
+          desired_directory
+        ),
+        call. = FALSE
+      )
+
+    }
+
+
+    unlink(
+      test_file
+    )
+
+
+    return(
+      normalizePath(
+        desired_directory,
+        winslash = "/",
+        mustWork = TRUE
+      )
+    )
+
+  }
+
+
+
+  stop(
+    paste0(
+      "Unable to create a writable output directory near:\n",
+      source_directory
+    ),
+    call. = FALSE
+  )
+
+}
+
+
+
+# ==============================================================================
+# 4. SAFE OUTPUT FILE NAME
+#
+# If an old file is locked, a timestamped version is used instead.
+# ==============================================================================
+
+safe_output_file <- function(
+    directory,
+    filename
+) {
+
+  candidate <- file.path(
+    directory,
+    filename
+  )
+
+
+  # If it does not exist, use directly
+  if (!file.exists(candidate)) {
+
+    return(candidate)
+
+  }
+
+
+  # Try deleting old output
+  deleted <- tryCatch(
+
+    {
+
+      unlink(
+        candidate,
+        force = TRUE
+      )
+
+      !file.exists(
+        candidate
+      )
+
+    },
+
+    error = function(e) {
+      FALSE
+    }
+
+  )
+
+
+  if (deleted) {
+
+    return(candidate)
+
+  }
+
+
+  # Existing file may be locked.
+  # Generate alternative name.
+
+  extension <- tools::file_ext(
+    filename
+  )
+
+
+  base_name <- tools::file_path_sans_ext(
+    basename(
+      filename
+    )
+  )
+
+
+  timestamp <- format(
+    Sys.time(),
+    "%Y%m%d_%H%M%S"
+  )
+
+
+  file.path(
+
+    directory,
+
+    paste0(
+      base_name,
+      "_",
+      timestamp,
+      ".",
+      extension
+    )
+
+  )
+
+}
+
+
+
+# ==============================================================================
+# 5. SELECT WORKBOOK
+# ==============================================================================
+
+cat(
+  "\n============================================================\n",
+  "SELECT PCA_complete_results.xlsx\n",
+  "============================================================\n\n",
+  sep = ""
+)
+
+
+input_file <- file.choose()
+
+
+cat(
+  "Selected workbook:\n",
+  input_file,
+  "\n\n",
+  sep = ""
+)
+
+
+
+# ==============================================================================
+# 6. CREATE SAFE OUTPUT DIRECTORY
+# ==============================================================================
+
+output_dir <- create_safe_output_directory(
+  input_file
+)
+
+
+cat(
+  "Output directory:\n",
+  output_dir,
+  "\n\n",
+  sep = ""
+)
+
+
+
+# ==============================================================================
+# 7. CHECK WORKBOOK
+# ==============================================================================
+
+workbook_sheets <- tryCatch(
+
+  openxlsx::getSheetNames(
+    input_file
+  ),
+
+  error = function(e) {
+
+    stop(
+
+      paste0(
+
+        "The selected file could not be opened as Excel.\n\n",
+
+        conditionMessage(e)
+
+      ),
+
+      call. = FALSE
+
+    )
+
+  }
+
+)
+
+
+
+required_sheets <- c(
+  "Variance_all_PCs",
+  "Scores_all_PCs",
+  "Loadings_all_PCs"
+)
+
+
+missing_sheets <- setdiff(
+  required_sheets,
+  workbook_sheets
+)
+
+
+if (length(missing_sheets) > 0) {
+
+  stop(
+
+    paste0(
+
+      "Missing worksheet(s): ",
+
+      paste(
+        missing_sheets,
+        collapse = ", "
+      )
+
+    ),
+
+    call. = FALSE
+
+  )
+
+}
+
+
+
+# ==============================================================================
+# 8. READ WORKBOOK
+# ==============================================================================
+
+variance_all <- openxlsx::read.xlsx(
+  input_file,
+  sheet = "Variance_all_PCs"
+)
+
+
+scores_all <- openxlsx::read.xlsx(
+  input_file,
+  sheet = "Scores_all_PCs"
+)
+
+
+loadings_all <- openxlsx::read.xlsx(
+  input_file,
+  sheet = "Loadings_all_PCs"
+)
+
+
+
+# ==============================================================================
+# 9. CLEAN DATA
+# ==============================================================================
+
+variance_all$site <- trimws(
+  as.character(
+    variance_all$site
+  )
+)
+
+
+variance_all$PC <- trimws(
+  as.character(
+    variance_all$PC
+  )
+)
+
+
+scores_all$site <- trimws(
+  as.character(
+    scores_all$site
+  )
+)
+
+
+loadings_all$site <- trimws(
+  as.character(
+    loadings_all$site
+  )
+)
+
+
+loadings_all$residue <- trimws(
+  as.character(
+    loadings_all$residue
+  )
+)
+
+
+
+for (nm in names(variance_all)) {
+
+  if (!nm %in% c("site", "PC")) {
+
+    variance_all[[nm]] <-
+      safe_num(
+        variance_all[[nm]]
+      )
+
+  }
+
+}
+
+
+
+for (nm in get_pc_columns(scores_all)) {
+
+  scores_all[[nm]] <-
+    safe_num(
+      scores_all[[nm]]
+    )
+
+}
+
+
+
+for (nm in get_pc_columns(loadings_all)) {
+
+  loadings_all[[nm]] <-
+    safe_num(
+      loadings_all[[nm]]
+    )
+
+}
+
+
+
+# ==============================================================================
+# 10. SITE DEFINITIONS
+# ==============================================================================
+
+site_order <- c(
+  "BZD",
+  "BB",
+  "GABA"
+)
+
+
+sites_available <- site_order[
+  site_order %in%
+    unique(
+      loadings_all$site
+    )
+]
+
+
+if (length(sites_available) == 0) {
+
+  stop(
+    "No BZD, BB or GABA data found.",
+    call. = FALSE
+  )
+
+}
+
+
+
+site_titles <- c(
+
+  "BZD" =
+    "BZD - α1/γ2 interface",
+
+  "BB" =
+    "BB - α1/β2 interface",
+
+  "GABA" =
+    "GABA - β2/α1 interface"
+
+)
+
+
+
+# ==============================================================================
+# 11. COLOUR SCALES
+# ==============================================================================
+
+
+# ------------------------------------------------------------------------------
+# Pearson ribbons
+#
+# -1 red
+#  0 white
+# +1 blue
+# ------------------------------------------------------------------------------
+
+correlation_col_fun <- circlize::colorRamp2(
+
+  c(
+    -1,
+    0,
+    1
+  ),
+
+  c(
+    "#B2182B",
+    "#FFFFFF",
+    "#2166AC"
+  )
+
+)
+
+
+
+# ------------------------------------------------------------------------------
+# PCA loading rings
+#
+# Reference-image palette:
+#
+# -1 turquoise
+#  0 white
+# +1 orange
+# ------------------------------------------------------------------------------
+
+loading_negative_colour <- "#1A9191"
+
+loading_zero_colour <- "#FFFFFF"
+
+loading_positive_colour <- "#D37C49"
+
+
+
+PC1_loading_col_fun <- circlize::colorRamp2(
+
+  c(
+    -1,
+    0,
+    1
+  ),
+
+  c(
+    loading_negative_colour,
+    loading_zero_colour,
+    loading_positive_colour
+  )
+
+)
+
+
+
+PC2_loading_col_fun <- circlize::colorRamp2(
+
+  c(
+    -1,
+    0,
+    1
+  ),
+
+  c(
+    loading_negative_colour,
+    loading_zero_colour,
+    loading_positive_colour
+  )
+
+)
+
+
+
+# ==============================================================================
+# 12. CALCULATE PCA NODE INFORMATION
+# ==============================================================================
+
+calculate_nodes <- function(
+    site_name
+) {
+
+
+  load_site <- loadings_all[
+    loadings_all$site == site_name,
+    ,
+    drop = FALSE
+  ]
+
+
+  if (nrow(load_site) < 2) {
+
+    stop(
+      paste0(
+        "Too few residues for site: ",
+        site_name
+      ),
+      call. = FALSE
+    )
+
+  }
+
+
+  pc1 <- safe_num(
+    load_site$PC1
+  )
+
+
+  pc2 <- safe_num(
+    load_site$PC2
+  )
+
+
+  if (
+    any(!is.finite(pc1)) ||
+      any(!is.finite(pc2))
+  ) {
+
+    stop(
+      paste0(
+        "Non-finite PC1/PC2 loadings for site: ",
+        site_name
+      ),
+      call. = FALSE
+    )
+
+  }
+
+
+  den1 <- sum(
+    pc1^2
+  )
+
+
+  den2 <- sum(
+    pc2^2
+  )
+
+
+  node_table <- data.frame(
+
+    site =
+      site_name,
+
+    residue =
+      load_site$residue,
+
+    PC1_loading =
+      pc1,
+
+    PC2_loading =
+      pc2,
+
+    PC1_contribution_percent =
+      (
+        pc1^2 /
+          den1
+      ) *
+      100,
+
+    PC2_contribution_percent =
+      (
+        pc2^2 /
+          den2
+      ) *
+      100,
+
+    stringsAsFactors =
+      FALSE
+
+  )
+
+
+  node_table$total_PC12_contribution <-
+
+    node_table$PC1_contribution_percent +
+
+    node_table$PC2_contribution_percent
+
+
+
+  node_table$dominant_component <- ifelse(
+
+    node_table$PC2_contribution_percent >
+      node_table$PC1_contribution_percent,
+
+    "PC2",
+
+    "PC1"
+
+  )
+
+
+
+  node_table$loading_angle <- atan2(
+
+    node_table$PC2_loading,
+
+    node_table$PC1_loading
+
+  )
+
+
+  node_table
+
+}
+
+
+
+# ==============================================================================
+# 13. RECONSTRUCT PCA INPUT MATRIX
+# ==============================================================================
+
+reconstruct_fingerprint <- function(
+    site_name
+) {
+
+
+  scores_site <- scores_all[
+    scores_all$site == site_name,
+    ,
+    drop = FALSE
+  ]
+
+
+  load_site <- loadings_all[
+    loadings_all$site == site_name,
+    ,
+    drop = FALSE
+  ]
+
+
+  common_pcs <- intersect(
+
+    get_pc_columns(
+      scores_site
+    ),
+
+    get_pc_columns(
+      load_site
+    )
+
+  )
+
+
+  valid_pcs <- common_pcs[
+
+    vapply(
+
+      common_pcs,
+
+      function(pc) {
+
+        s <- safe_num(
+          scores_site[[pc]]
+        )
+
+
+        l <- safe_num(
+          load_site[[pc]]
+        )
+
+
+        all(
+          is.finite(s)
+        ) &&
+          all(
+            is.finite(l)
+          )
+
+      },
+
+      logical(1)
+
+    )
+
+  ]
+
+
+  if (length(valid_pcs) < 2) {
+
+    stop(
+      paste0(
+        "Fewer than two valid PCs for site: ",
+        site_name
+      ),
+      call. = FALSE
+    )
+
+  }
+
+
+
+  score_matrix <- as.matrix(
+
+    scores_site[
+      ,
+      valid_pcs,
+      drop = FALSE
+    ]
+
+  )
+
+
+  loading_matrix <- as.matrix(
+
+    load_site[
+      ,
+      valid_pcs,
+      drop = FALSE
+    ]
+
+  )
+
+
+  storage.mode(
+    score_matrix
+  ) <- "double"
+
+
+  storage.mode(
+    loading_matrix
+  ) <- "double"
+
+
+
+  X_centered <-
+
+    score_matrix %*%
+
+    t(
+      loading_matrix
+    )
+
+
+
+  X_centered <- round(
+
+    X_centered,
+
+    digits =
+      reconstruction_digits
+
+  )
+
+
+  colnames(
+    X_centered
+  ) <- load_site$residue
+
+
+  X_centered
+
+}
+
+
+
+# ==============================================================================
+# 14. CALCULATE PEARSON CORRELATIONS
+# ==============================================================================
+
+calculate_site_correlations <- function(
+    site_name
+) {
+
+
+  X <- reconstruct_fingerprint(
+    site_name
+  )
+
+
+  nodes <- calculate_nodes(
+    site_name
+  )
+
+
+  residues <- colnames(
+    X
+  )
+
+
+  pair_idx <- combn(
+    seq_along(residues),
+    2
+  )
+
+
+  results <- vector(
+    "list",
+    ncol(pair_idx)
+  )
+
+
+
+  for (
+    k in seq_len(
+      ncol(pair_idx)
+    )
+  ) {
+
+
+    i <- pair_idx[
+      1,
+      k
+    ]
+
+
+    j <- pair_idx[
+      2,
+      k
+    ]
+
+
+    x <- X[
+      ,
+      i
+    ]
+
+
+    y <- X[
+      ,
+      j
+    ]
+
+
+
+    pearson_test <- tryCatch(
+
+      suppressWarnings(
+
+        cor.test(
+          x,
+          y,
+          method = "pearson"
+        )
+
+      ),
+
+      error = function(e) {
+        NULL
+      }
+
+    )
+
+
+
+    if (
+      is.null(
+        pearson_test
+      )
+    ) {
+
+      r <- NA_real_
+
+      p <- NA_real_
+
+    } else {
+
+      r <- unname(
+        pearson_test$estimate
+      )
+
+      p <- pearson_test$p.value
+
+    }
+
+
+
+    results[[k]] <- data.frame(
+
+      site =
+        site_name,
+
+      residue_1 =
+        residues[i],
+
+      residue_2 =
+        residues[j],
+
+      n =
+        length(x),
+
+      pearson_r =
+        r,
+
+      pearson_abs =
+        abs(r),
+
+      pearson_p =
+        p,
+
+      stringsAsFactors =
+        FALSE
+
+    )
+
+  }
+
+
+
+  edges <- do.call(
+    rbind,
+    results
+  )
+
+
+
+  edges$pearson_FDR <- p.adjust(
+
+    edges$pearson_p,
+
+    method =
+      "BH"
+
+  )
+
+
+
+  list(
+
+    edges =
+      edges,
+
+    nodes =
+      nodes
+
+  )
+
+}
+
+
+
+# ==============================================================================
+# 15. RUN ALL SITES
+# ==============================================================================
+
+analysis_results <- vector(
+  "list",
+  length(sites_available)
+)
+
+
+names(
+  analysis_results
+) <- sites_available
+
+
+
+for (
+  site_name in sites_available
+) {
+
+
+  cat(
+    "Calculating Pearson correlations for ",
+    site_name,
+    "...\n",
+    sep = ""
+  )
+
+
+  analysis_results[[site_name]] <-
+    calculate_site_correlations(
+      site_name
+    )
+
+}
+
+
+
+# ==============================================================================
+# 16. PREPARE SITE PLOT
+# ==============================================================================
+
+prepare_site_plot <- function(
+    site_name
+) {
+
+
+  edges_site <-
+    analysis_results[[site_name]]$edges
+
+
+  nodes_site <-
+    analysis_results[[site_name]]$nodes
+
+
+
+  edges_sig <- edges_site[
+
+    is.finite(
+      edges_site$pearson_r
+    ) &
+
+      is.finite(
+        edges_site$pearson_FDR
+      ) &
+
+      edges_site$pearson_FDR <=
+        maximum_FDR &
+
+      edges_site$pearson_abs >=
+        min_abs_correlation,
+
+    ,
+
+    drop = FALSE
+
+  ]
+
+
+
+  if (
+    nrow(edges_sig) == 0
+  ) {
+
+    stop(
+      paste0(
+        site_name,
+        ": no significant Pearson correlations survived."
+      ),
+      call. = FALSE
+    )
+
+  }
+
+
+
+  significant_residues <- unique(
+
+    c(
+
+      edges_sig$residue_1,
+
+      edges_sig$residue_2
+
+    )
+
+  )
+
+
+
+  nodes_sig <- nodes_site[
+
+    nodes_site$residue %in%
+      significant_residues,
+
+    ,
+
+    drop = FALSE
+
+  ]
+
+
+
+  nodes_sig <- nodes_sig[
+
+    order(
+      -nodes_sig$total_PC12_contribution
+    ),
+
+    ,
+
+    drop = FALSE
+
+  ]
+
+
+
+  nodes_selected <- head(
+
+    nodes_sig,
+
+    top_n_residues
+
+  )
+
+
+
+  selected_residues <-
+    nodes_selected$residue
+
+
+
+  edges_plot <- edges_sig[
+
+    edges_sig$residue_1 %in%
+      selected_residues &
+
+      edges_sig$residue_2 %in%
+      selected_residues,
+
+    ,
+
+    drop = FALSE
+
+  ]
+
+
+
+  if (
+    nrow(edges_plot) == 0
+  ) {
+
+    stop(
+      paste0(
+        site_name,
+        ": no significant correlation remained among selected residues."
+      ),
+      call. = FALSE
+    )
+
+  }
+
+
+
+  residues_used <- unique(
+
+    c(
+
+      edges_plot$residue_1,
+
+      edges_plot$residue_2
+
+    )
+
+  )
+
+
+
+  nodes_plot <- nodes_selected[
+
+    nodes_selected$residue %in%
+      residues_used,
+
+    ,
+
+    drop = FALSE
+
+  ]
+
+
+
+  component_order <- ifelse(
+
+    nodes_plot$dominant_component ==
+      "PC2",
+
+    1,
+
+    2
+
+  )
+
+
+
+  nodes_plot <- nodes_plot[
+
+    order(
+
+      component_order,
+
+      nodes_plot$loading_angle
+
+    ),
+
+    ,
+
+    drop = FALSE
+
+  ]
+
+
+
+  residue_order <-
+    nodes_plot$residue
+
+
+
+  gap_after <- make_gap_after(
+
+    nodes_plot$dominant_component,
+
+    small_gap =
+      2.5,
+
+    large_gap =
+      12,
+
+    final_gap =
+      12
+
+  )
+
+
+
+  edges_plot$link_colour <-
+
+    correlation_col_fun(
+
+      edges_plot$pearson_r
+
+    )
+
+
+
+  list(
+
+    edges =
+      edges_plot,
+
+    nodes =
+      nodes_plot,
+
+    order =
+      residue_order,
+
+    gap_after =
+      gap_after
+
+  )
+
+}
+
+
+
+# ==============================================================================
+# 17. DRAW MAIN CHORD
+# ==============================================================================
+
+draw_main_chord <- function(
+    site_name
+) {
+
+
+  plot_data <- prepare_site_plot(
+    site_name
+  )
+
+
+  edges_plot <-
+    plot_data$edges
+
+
+  nodes_plot <-
+    plot_data$nodes
+
+
+  residue_order <-
+    plot_data$order
+
+
+  gap_after <-
+    plot_data$gap_after
+
+
+
+  par(
+
+    mar = c(
+      0.5,
+      0.5,
+      3.4,
+      0.5
+    ),
+
+    xpd =
+      NA,
+
+    family =
+      font_family
+
+  )
+
+
+  circos.clear()
+
+
+
+  circos.par(
+
+    start.degree =
+      90,
+
+    gap.after =
+      gap_after,
+
+    track.margin =
+      c(
+        0.003,
+        0.003
+      ),
+
+    cell.padding =
+      c(
+        0,
+        0,
+        0,
+        0
+      ),
+
+    points.overflow.warning =
+      FALSE
+
+  )
+
+
+
+  link_data <- data.frame(
+
+    from =
+      edges_plot$residue_1,
+
+    to =
+      edges_plot$residue_2,
+
+    value =
+      edges_plot$pearson_abs,
+
+    stringsAsFactors =
+      FALSE
+
+  )
+
+
+
+  link_colours <- grDevices::adjustcolor(
+
+    edges_plot$link_colour,
+
+    alpha.f =
+      0.78
+
+  )
+
+
+
+  chordDiagram(
+
+    x =
+      link_data,
+
+    order =
+      residue_order,
+
+    col =
+      link_colours,
+
+    transparency =
+      0,
+
+    directional =
+      0,
+
+    annotationTrack =
+      NULL,
+
+    preAllocateTracks =
+      list(
+
+        list(
+          track.height = 0.22
+        ),
+
+        # PC1
+        list(
+          track.height = 0.055
+        ),
+
+        # PC2
+        list(
+          track.height = 0.055
+        )
+
+      ),
+
+    link.sort =
+      TRUE,
+
+    link.decreasing =
+      TRUE,
+
+    link.border =
+      NA
+
+  )
+
+
+
+  # ---------------------------------------------------------------------------
+  # RESIDUE LABELS
+  # ---------------------------------------------------------------------------
+
+  circos.trackPlotRegion(
+
+    track.index =
+      1,
+
+    bg.border =
+      NA,
+
+    bg.col =
+      NA,
+
+    panel.fun = function(
+        x,
+        y
+    ) {
+
+
+      residue_name <-
+        CELL_META$sector.index
+
+
+
+      circos.text(
+
+        x =
+          CELL_META$xcenter,
+
+        y =
+          mean(
+            CELL_META$ylim
+          ),
+
+        labels =
+          residue_name,
+
+        facing =
+          "bending.outside",
+
+        niceFacing =
+          TRUE,
+
+        adj =
+          c(
+            0.5,
+            0.5
+          ),
+
+        cex =
+          0.78,
+
+        font =
+          2,
+
+        family =
+          font_family
+
+      )
+
+    }
+
+  )
+
+
+
+  # ---------------------------------------------------------------------------
+  # OUTER RING — PC1
+  # ---------------------------------------------------------------------------
+
+  circos.trackPlotRegion(
+
+    track.index =
+      2,
+
+    bg.border =
+      NA,
+
+    bg.col =
+      NA,
+
+    panel.fun = function(
+        x,
+        y
+    ) {
+
+
+      residue_name <-
+        CELL_META$sector.index
+
+
+      idx <- match(
+
+        residue_name,
+
+        nodes_plot$residue
+
+      )
+
+
+      loading_value <-
+
+        nodes_plot$PC1_loading[
+          idx
+        ]
+
+
+
+      circos.rect(
+
+        CELL_META$xlim[1],
+
+        CELL_META$ylim[1],
+
+        CELL_META$xlim[2],
+
+        CELL_META$ylim[2],
+
+        col =
+          PC1_loading_col_fun(
+            loading_value
+          ),
+
+        border =
+          "white",
+
+        lwd =
+          1.1
+
+      )
+
+    }
+
+  )
+
+
+
+  # ---------------------------------------------------------------------------
+  # INNER RING — PC2
+  # ---------------------------------------------------------------------------
+
+  circos.trackPlotRegion(
+
+    track.index =
+      3,
+
+    bg.border =
+      NA,
+
+    bg.col =
+      NA,
+
+    panel.fun = function(
+        x,
+        y
+    ) {
+
+
+      residue_name <-
+        CELL_META$sector.index
+
+
+      idx <- match(
+
+        residue_name,
+
+        nodes_plot$residue
+
+      )
+
+
+      loading_value <-
+
+        nodes_plot$PC2_loading[
+          idx
+        ]
+
+
+
+      circos.rect(
+
+        CELL_META$xlim[1],
+
+        CELL_META$ylim[1],
+
+        CELL_META$xlim[2],
+
+        CELL_META$ylim[2],
+
+        col =
+          PC2_loading_col_fun(
+            loading_value
+          ),
+
+        border =
+          "white",
+
+        lwd =
+          1.1
+
+      )
+
+    }
+
+  )
+
+
+
+  title(
+
+    main =
+      site_titles[[site_name]],
+
+    cex.main =
+      1.35,
+
+    font.main =
+      2,
+
+    family =
+      font_family,
+
+    line =
+      1.1
+
+  )
+
+
+
+  mtext(
+
+    "Outer ring = PC1 loading    |    Inner ring = PC2 loading",
+
+    side =
+      3,
+
+    line =
+      0.05,
+
+    cex =
+      0.72,
+
+    family =
+      font_family,
+
+    col =
+      "#555555"
+
+  )
+
+
+
+  circos.clear()
+
+}
+
+
+
+# ==============================================================================
+# 18. GRADIENT LEGEND
+# ==============================================================================
+
+draw_gradient_bar <- function(
+    x_left,
+    x_right,
+    y_bottom,
+    y_top,
+    colour_function,
+    title_text
+) {
+
+
+  gradient_values <- seq(
+    -1,
+    1,
+    length.out =
+      300
+  )
+
+
+  x_breaks <- seq(
+
+    x_left,
+
+    x_right,
+
+    length.out =
+      length(
+        gradient_values
+      ) + 1
+
+  )
+
+
+
+  for (
+    i in seq_along(
+      gradient_values
+    )
+  ) {
+
+
+    rect(
+
+      x_breaks[i],
+
+      y_bottom,
+
+      x_breaks[i + 1],
+
+      y_top,
+
+      col =
+        colour_function(
+          gradient_values[i]
+        ),
+
+      border =
+        NA
+
+    )
+
+  }
+
+
+
+  rect(
+
+    x_left,
+
+    y_bottom,
+
+    x_right,
+
+    y_top,
+
+    border =
+      "#777777",
+
+    lwd =
+      0.8
+
+  )
+
+
+
+  text(
+
+    (
+      x_left +
+        x_right
+    ) /
+      2,
+
+    y_top +
+      0.10,
+
+    labels =
+      title_text,
+
+    cex =
+      0.98,
+
+    font =
+      2,
+
+    family =
+      font_family
+
+  )
+
+
+
+  text(
+
+    c(
+      x_left,
+      (
+        x_left +
+          x_right
+      ) /
+        2,
+      x_right
+    ),
+
+    y_bottom -
+      0.055,
+
+    labels =
+      c(
+        "-1",
+        "0",
+        "1"
+      ),
+
+    cex =
+      0.82,
+
+    family =
+      font_family
+
+  )
+
+}
+
+
+
+# ==============================================================================
+# 19. BOTTOM LEGENDS
+# ==============================================================================
+
+draw_bottom_legends <- function(
+    site_name
+) {
+
+
+  plot.new()
+
+
+  plot.window(
+
+    xlim =
+      c(
+        0,
+        1
+      ),
+
+    ylim =
+      c(
+        0,
+        1
+      ),
+
+    xaxs =
+      "i",
+
+    yaxs =
+      "i"
+
+  )
+
+
+
+  PC1_variance <- get_variance_percent(
+
+    variance_all,
+
+    site_name,
+
+    "PC1"
+
+  )
+
+
+
+  PC2_variance <- get_variance_percent(
+
+    variance_all,
+
+    site_name,
+
+    "PC2"
+
+  )
+
+
+
+  PC1_title <- paste0(
+
+    "PC1 (",
+
+    round(
+      PC1_variance,
+      1
+    ),
+
+    "% explained variance)\nOuter loading ring"
+
+  )
+
+
+
+  PC2_title <- paste0(
+
+    "PC2 (",
+
+    round(
+      PC2_variance,
+      1
+    ),
+
+    "% explained variance)\nInner loading ring"
+
+  )
+
+
+
+  # PC1
+  draw_gradient_bar(
+
+    x_left =
+      0.10,
+
+    x_right =
+      0.43,
+
+    y_bottom =
+      0.62,
+
+    y_top =
+      0.75,
+
+    colour_function =
+      PC1_loading_col_fun,
+
+    title_text =
+      PC1_title
+
+  )
+
+
+
+  # PC2
+  draw_gradient_bar(
+
+    x_left =
+      0.57,
+
+    x_right =
+      0.90,
+
+    y_bottom =
+      0.62,
+
+    y_top =
+      0.75,
+
+    colour_function =
+      PC2_loading_col_fun,
+
+    title_text =
+      PC2_title
+
+  )
+
+
+
+  # Pearson
+  draw_gradient_bar(
+
+    x_left =
+      0.30,
+
+    x_right =
+      0.70,
+
+    y_bottom =
+      0.20,
+
+    y_top =
+      0.31,
+
+    colour_function =
+      correlation_col_fun,
+
+    title_text =
+      "Pearson correlation (r) — ribbon colour"
+
+  )
+
+
+
+  text(
+
+    0.50,
+
+    0.04,
+
+    labels =
+      paste0(
+
+        "Only significant correlations are shown (BH-FDR ≤ ",
+
+        maximum_FDR,
+
+        "). Ribbon width = |r|."
+
+      ),
+
+    cex =
+      0.76,
+
+    family =
+      font_family,
+
+    col =
+      "#444444"
+
+  )
+
+}
+
+
+
+# ==============================================================================
+# 20. COMPLETE SITE FIGURE
+# ==============================================================================
+
+draw_site_figure <- function(
+    site_name
+) {
+
+
+  layout(
+
+    matrix(
+      c(
+        1,
+        2
+      ),
+      nrow =
+        2
+    ),
+
+    heights =
+      c(
+        4.8,
+        1.55
+      )
+
+  )
+
+
+  draw_main_chord(
+    site_name
+  )
+
+
+  draw_bottom_legends(
+    site_name
+  )
+
+
+  layout(1)
+
+}
+
+
+
+# ==============================================================================
+# 21. EXPORT ANALYSIS TABLES
+# ==============================================================================
+
+all_edges <- do.call(
+
+  rbind,
+
+  lapply(
+    analysis_results,
+    function(x) {
+      x$edges
+    }
+  )
+
+)
+
+
+all_nodes <- do.call(
+
+  rbind,
+
+  lapply(
+    analysis_results,
+    function(x) {
+      x$nodes
+    }
+  )
+
+)
+
+
+
+excel_output <- safe_output_file(
+
+  output_dir,
+
+  "chord_diagram_calculated.xlsx"
+
+)
+
+
+
+wb <- createWorkbook()
+
+
+addWorksheet(
+  wb,
+  "Pearson_edges"
+)
+
+
+writeData(
+  wb,
+  "Pearson_edges",
+  all_edges
+)
+
+
+addWorksheet(
+  wb,
+  "PCA_nodes"
+)
+
+
+writeData(
+  wb,
+  "PCA_nodes",
+  all_nodes
+)
+
+
+saveWorkbook(
+
+  wb,
+
+  excel_output,
+
+  overwrite =
+    TRUE
+
+)
+
+
+
+# ==============================================================================
+# 22. SAVE FIGURES
+# ==============================================================================
+
+for (
+  site_name in sites_available
+) {
+
+
+  cat(
+    "\nGenerating figure for ",
+    site_name,
+    "...\n",
+    sep = ""
+  )
+
+
+
+  plot_data <- prepare_site_plot(
+    site_name
+  )
+
+
+
+  # ---------------------------------------------------------------------------
+  # CSV
+  # ---------------------------------------------------------------------------
+
+  csv_file <- safe_output_file(
+
+    output_dir,
+
+    paste0(
+      "ChordDiagram_",
+      site_name,
+      "_significant_Pearson_edges.csv"
+    )
+
+  )
+
+
+  write.csv(
+
+    plot_data$edges,
+
+    csv_file,
+
+    row.names =
+      FALSE
+
+  )
+
+
+
+  # ===========================================================================
+  # PNG
+  # ===========================================================================
+
+  png_file <- safe_output_file(
+
+    output_dir,
+
+    paste0(
+      "ChordDiagram_",
+      site_name,
+      "_pearson.png"
+    )
+
+  )
+
+
+  cat(
+    "Saving PNG:\n",
+    png_file,
+    "\n",
+    sep = ""
+  )
+
+
+  grDevices::png(
+
+    filename =
+      png_file,
+
+    width =
+      png_width,
+
+    height =
+      png_height,
+
+    res =
+      png_res,
+
+    units =
+      "px",
+
+    bg =
+      output_background
+
+  )
+
+
+  draw_site_figure(
+    site_name
+  )
+
+
+  grDevices::dev.off()
+
+
+
+  # ===========================================================================
+  # TIFF
+  # ===========================================================================
+
+  tiff_file <- safe_output_file(
+
+    output_dir,
+
+    paste0(
+      "ChordDiagram_",
+      site_name,
+      "_pearson.tiff"
+    )
+
+  )
+
+
+  cat(
+    "Saving TIFF:\n",
+    tiff_file,
+    "\n",
+    sep = ""
+  )
+
+
+  grDevices::tiff(
+
+    filename =
+      tiff_file,
+
+    width =
+      tiff_width,
+
+    height =
+      tiff_height,
+
+    res =
+      tiff_res,
+
+    units =
+      "px",
+
+    compression =
+      "lzw",
+
+    bg =
+      output_background
+
+  )
+
+
+  draw_site_figure(
+    site_name
+  )
+
+
+  grDevices::dev.off()
+
+
+
+  # ===========================================================================
+  # PDF
+  # ===========================================================================
+
+  pdf_file <- safe_output_file(
+
+    output_dir,
+
+    paste0(
+      "ChordDiagram_",
+      site_name,
+      "_pearson.pdf"
+    )
+
+  )
+
+
+  cat(
+    "Saving PDF:\n",
+    pdf_file,
+    "\n",
+    sep = ""
+  )
+
+
+  grDevices::pdf(
+
+    file =
+      pdf_file,
+
+    width =
+      10.5,
+
+    height =
+      9.5,
+
+    family =
+      "Helvetica",
+
+    useDingbats =
+      FALSE
+
+  )
+
+
+  draw_site_figure(
+    site_name
+  )
+
+
+  grDevices::dev.off()
+
+}
+
+
+
+# ==============================================================================
+# 23. COMBINED PDF
+# ==============================================================================
+
+combined_pdf <- safe_output_file(
+
+  output_dir,
+
+  "ChordDiagram_ALL_SITES_pearson.pdf"
+
+)
+
+
+grDevices::pdf(
+
+  file =
+    combined_pdf,
+
+  width =
+    10.5,
+
+  height =
+    9.5,
+
+  family =
+    "Helvetica",
+
+  useDingbats =
+    FALSE
+
+)
+
+
+
+for (
+  site_name in sites_available
+) {
+
+
+  draw_site_figure(
+    site_name
+  )
+
+}
+
+
+grDevices::dev.off()
+
+
+
+# ==============================================================================
+# 24. DISPLAY FIRST SITE IN RSTUDIO
+# ==============================================================================
+
+draw_site_figure(
+  sites_available[1]
+)
+
+
+
+# ==============================================================================
+# 25. SUMMARY
+# ==============================================================================
+
+cat(
+  "\n============================================================\n"
+)
+
+
+cat(
+  "CHORD DIAGRAM ANALYSIS COMPLETED\n"
+)
+
+
+cat(
+  "============================================================\n"
+)
+
+
+cat(
+  "Pearson significance: BH-FDR <= ",
+  maximum_FDR,
+  "\n",
+  sep = ""
+)
+
+
+cat(
+  "Minimum |r|: ",
+  min_abs_correlation,
+  "\n",
+  sep = ""
+)
+
+
+cat(
+  "Maximum residues per site: ",
+  top_n_residues,
+  "\n",
+  sep = ""
+)
+
+
+cat(
+  "\nPCA loading gradient:\n"
+)
+
+
+cat(
+  "-1 = turquoise (#1A9191)\n"
+)
+
+
+cat(
+  " 0 = white (#FFFFFF)\n"
+)
+
+
+cat(
+  "+1 = orange (#D37C49)\n"
+)
+
+
+cat(
+  "\nOuter ring = PC1 loading\n"
+)
+
+
+cat(
+  "Inner ring = PC2 loading\n"
+)
+
+
+cat(
+  "\nOutput folder:\n",
+  output_dir,
+  "\n",
+  sep = ""
+)
+
+
+cat(
+  "\nLinks displayed:\n"
+)
+
+
+
+for (
+  site_name in sites_available
+) {
+
+
+  pd <- prepare_site_plot(
+    site_name
+  )
+
+
+  cat(
+
+    site_name,
+
+    ": ",
+
+    nrow(
+      pd$edges
+    ),
+
+    " links\n",
+
+    sep = ""
+
+  )
+
+}
+
+
+cat(
+  "\nAll files were saved successfully.\n"
+)
