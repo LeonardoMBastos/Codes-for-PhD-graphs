@@ -1,17 +1,50 @@
 # ==============================================================================
-# PCA OF RESIDUE-INTERACTION FINGERPRINTS
-# FINAL VERSION
+# RESIDUE-INTERACTION FINGERPRINT PCA
+# + RESIDUE-RESIDUE CORRELATIONS
+# + XLSX OUTPUTS FOR CHORD DIAGRAM
 #
-# PANEL ORDER:
-#   1. BZD
-#   2. BB
-#   3. GABA
+# RSTUDIO — CONSOLIDATED VERSION
 #
-# INSET ALIGNMENT:
-#   - top of inset aligned with top of main PCA Y-axis;
-#   - right edge of inset aligned with right end of main PCA X-axis;
-#   - inset remains completely inside each PCA panel.
+# INPUT:
+#   Select the original CSV containing:
+#
+#       site
+#       compound
+#       affinity
+#       pose_ID
+#       Top residues
+#
+# OUTPUTS:
+#
+#   PCA_complete_results.xlsx
+#
+#       Variance_all_PCs
+#       Scores_all_PCs
+#       Loadings_all_PCs
+#       Loadings_PC1_PC2
+#       Centroids_PC1_PC2
+#       Top10_PC1_PC2
+#
+#   chord_diagram.xlsx
+#
+#       README
+#       Chord_edges
+#       Chord_nodes
+#       Variance_PC1_PC2
+#       Pearson_BZD
+#       Pearson_BB
+#       Pearson_GABA
+#       Spearman_BZD
+#       Spearman_BB
+#       Spearman_GABA
+#
+# IMPORTANT:
+#
+# Residue-residue correlations are calculated from the SAME
+# Hellinger-transformed fingerprint matrix used as input for PCA.
+#
 # ==============================================================================
+
 
 
 # ==============================================================================
@@ -22,12 +55,9 @@ required_packages <- c(
   "dplyr",
   "tidyr",
   "stringr",
-  "ggplot2",
-  "ggrepel",
-  "patchwork",
-  "openxlsx",
-  "cowplot"
+  "openxlsx"
 )
+
 
 missing_packages <- required_packages[
   !vapply(
@@ -38,30 +68,37 @@ missing_packages <- required_packages[
   )
 ]
 
+
 if (length(missing_packages) > 0) {
-  message(
-    "Installing missing packages: ",
-    paste(missing_packages, collapse = ", ")
+
+  install.packages(
+    missing_packages
   )
 
-  install.packages(missing_packages)
 }
+
 
 library(dplyr)
 library(tidyr)
 library(stringr)
-library(ggplot2)
-library(ggrepel)
-library(patchwork)
 library(openxlsx)
-library(cowplot)
+
 
 
 # ==============================================================================
-# 1. SELECT AND IMPORT CSV
+# 1. SELECT ORIGINAL CSV
 # ==============================================================================
+
+cat(
+  "\n============================================================\n",
+  "SELECT THE ORIGINAL CSV FILE\n",
+  "============================================================\n\n",
+  sep = ""
+)
+
 
 input_file <- file.choose()
+
 
 dat <- read.csv(
   input_file,
@@ -69,9 +106,35 @@ dat <- read.csv(
   stringsAsFactors = FALSE
 )
 
-message("Input file: ", input_file)
-message("Rows imported: ", nrow(dat))
-message("Columns imported: ", ncol(dat))
+
+output_dir <- dirname(
+  input_file
+)
+
+
+cat(
+  "Input file:\n",
+  input_file,
+  "\n\n",
+  sep = ""
+)
+
+
+cat(
+  "Rows: ",
+  nrow(dat),
+  "\n",
+  sep = ""
+)
+
+
+cat(
+  "Columns: ",
+  ncol(dat),
+  "\n\n",
+  sep = ""
+)
+
 
 
 # ==============================================================================
@@ -86,49 +149,80 @@ required_columns <- c(
   "Top residues"
 )
 
+
 missing_columns <- setdiff(
   required_columns,
   names(dat)
 )
 
+
 if (length(missing_columns) > 0) {
+
   stop(
-    "The following required columns are missing: ",
-    paste(missing_columns, collapse = ", ")
+    paste0(
+      "Missing required column(s): ",
+      paste(
+        missing_columns,
+        collapse = ", "
+      )
+    ),
+    call. = FALSE
   )
+
 }
+
 
 
 # ==============================================================================
 # 3. CLEAN DATA
 # ==============================================================================
 
-dat <- dat %>%
-  mutate(
-    affinity = as.numeric(
-      str_replace_all(
-        trimws(as.character(affinity)),
-        ",",
-        "."
-      )
-    ),
+safe_num <- function(x) {
 
-    site = trimws(
-      as.character(site)
-    ),
-
-    compound = trimws(
-      as.character(compound)
-    ),
-
-    pose_ID = as.character(
-      pose_ID
-    ),
-
-    `Top residues` = as.character(
-      `Top residues`
+  as.numeric(
+    str_replace_all(
+      trimws(
+        as.character(x)
+      ),
+      ",",
+      "."
     )
   )
+
+}
+
+
+dat <- dat %>%
+
+  mutate(
+
+    affinity =
+      safe_num(
+        affinity
+      ),
+
+    site =
+      trimws(
+        as.character(site)
+      ),
+
+    compound =
+      trimws(
+        as.character(compound)
+      ),
+
+    pose_ID =
+      as.character(
+        pose_ID
+      ),
+
+    `Top residues` =
+      as.character(
+        `Top residues`
+      )
+
+  )
+
 
 
 # ==============================================================================
@@ -143,71 +237,326 @@ compound_levels <- c(
   "NER"
 )
 
-dat <- dat %>%
-  mutate(
-    compound = factor(
-      compound,
-      levels = compound_levels
-    )
-  )
+
+dat$compound <- factor(
+  dat$compound,
+  levels = compound_levels
+)
+
 
 
 # ==============================================================================
 # 5. SITE ORDER
 # ==============================================================================
 
-required_sites <- c(
+site_levels <- c(
   "BZD",
   "BB",
   "GABA"
 )
 
+
 missing_sites <- setdiff(
-  required_sites,
+  site_levels,
   unique(dat$site)
 )
 
+
 if (length(missing_sites) > 0) {
+
   stop(
-    "The following expected site(s) are absent from the input data: ",
-    paste(missing_sites, collapse = ", ")
+    paste0(
+      "Expected site(s) missing from input: ",
+      paste(
+        missing_sites,
+        collapse = ", "
+      )
+    ),
+    call. = FALSE
   )
+
 }
 
 
-# ==============================================================================
-# 6. COMPOUNDS OBSERVED IN SPREADSHEET
-# ==============================================================================
-
-observed_compounds <- dat %>%
-  filter(!is.na(compound)) %>%
-  pull(compound) %>%
-  as.character() %>%
-  unique()
-
-observed_compounds <- compound_levels[
-  compound_levels %in% observed_compounds
-]
-
-message("\nCompounds observed in spreadsheet:")
-print(observed_compounds)
-
 
 # ==============================================================================
-# 7. COLOUR PALETTE
+# 6. RESIDUE-RESIDUE CORRELATION FUNCTION
 # ==============================================================================
 
-compound_colors <- c(
-  "DZP"  = "#BFA9D8",
-  "PHB"  = "#D39A32",
-  "GABA" = "#C75B56",
-  "LIN"  = "#7FBE87",
-  "NER"  = "#7DA9D1"
-)
+calculate_residue_correlations <- function(
+    X,
+    site_name
+) {
+
+
+  residues <- colnames(
+    X
+  )
+
+
+  if (length(residues) < 2) {
+
+    stop(
+      paste0(
+        "At least two residues are required for site: ",
+        site_name
+      ),
+      call. = FALSE
+    )
+
+  }
+
+
+  pair_index <- combn(
+    seq_along(residues),
+    2
+  )
+
+
+  results <- vector(
+    "list",
+    ncol(pair_index)
+  )
+
+
+
+  for (
+    k in seq_len(
+      ncol(pair_index)
+    )
+  ) {
+
+
+    i <- pair_index[
+      1,
+      k
+    ]
+
+
+    j <- pair_index[
+      2,
+      k
+    ]
+
+
+    x <- X[
+      ,
+      i
+    ]
+
+
+    y <- X[
+      ,
+      j
+    ]
+
+
+
+    # ==========================================================================
+    # PEARSON
+    # ==========================================================================
+
+    pearson_test <- tryCatch(
+
+      suppressWarnings(
+
+        cor.test(
+          x,
+          y,
+          method = "pearson"
+        )
+
+      ),
+
+      error = function(e) {
+        NULL
+      }
+
+    )
+
+
+    if (is.null(pearson_test)) {
+
+      pearson_r <- NA_real_
+      pearson_p <- NA_real_
+
+    } else {
+
+      pearson_r <- unname(
+        pearson_test$estimate
+      )
+
+      pearson_p <- pearson_test$p.value
+
+    }
+
+
+
+    # ==========================================================================
+    # SPEARMAN
+    # ==========================================================================
+
+    spearman_test <- tryCatch(
+
+      suppressWarnings(
+
+        cor.test(
+          x,
+          y,
+          method = "spearman",
+          exact = FALSE
+        )
+
+      ),
+
+      error = function(e) {
+        NULL
+      }
+
+    )
+
+
+    if (is.null(spearman_test)) {
+
+      spearman_rho <- NA_real_
+      spearman_p <- NA_real_
+
+    } else {
+
+      spearman_rho <- unname(
+        spearman_test$estimate
+      )
+
+      spearman_p <- spearman_test$p.value
+
+    }
+
+
+
+    results[[k]] <- data.frame(
+
+      site =
+        site_name,
+
+      residue_1 =
+        residues[i],
+
+      residue_2 =
+        residues[j],
+
+      n =
+        length(x),
+
+      pearson_r =
+        pearson_r,
+
+      pearson_abs =
+        abs(
+          pearson_r
+        ),
+
+      pearson_p =
+        pearson_p,
+
+      pearson_direction =
+        ifelse(
+          is.na(pearson_r),
+          NA_character_,
+          ifelse(
+            pearson_r >= 0,
+            "Positive",
+            "Negative"
+          )
+        ),
+
+      spearman_rho =
+        spearman_rho,
+
+      spearman_abs =
+        abs(
+          spearman_rho
+        ),
+
+      spearman_p =
+        spearman_p,
+
+      spearman_direction =
+        ifelse(
+          is.na(spearman_rho),
+          NA_character_,
+          ifelse(
+            spearman_rho >= 0,
+            "Positive",
+            "Negative"
+          )
+        ),
+
+      stringsAsFactors =
+        FALSE
+
+    )
+
+  }
+
+
+
+  correlation_table <- do.call(
+    rbind,
+    results
+  )
+
+
+
+  # ============================================================================
+  # MULTIPLE-COMPARISON CORRECTION
+  # ============================================================================
+
+  correlation_table$pearson_FDR <- p.adjust(
+    correlation_table$pearson_p,
+    method = "BH"
+  )
+
+
+  correlation_table$spearman_FDR <- p.adjust(
+    correlation_table$spearman_p,
+    method = "BH"
+  )
+
+
+  correlation_table$pearson_significant_005 <-
+    !is.na(
+      correlation_table$pearson_FDR
+    ) &
+    correlation_table$pearson_FDR <= 0.05
+
+
+  correlation_table$spearman_significant_005 <-
+    !is.na(
+      correlation_table$spearman_FDR
+    ) &
+    correlation_table$spearman_FDR <= 0.05
+
+
+
+  correlation_table <- correlation_table[
+    order(
+      -correlation_table$pearson_abs
+    ),
+    ,
+    drop = FALSE
+  ]
+
+
+  return(
+    correlation_table
+  )
+
+}
+
 
 
 # ==============================================================================
-# 8. FUNCTION — BUILD FINGERPRINT + PCA
+# 7. FUNCTION — PCA FOR ONE BINDING SITE
 # ==============================================================================
 
 run_pca_site <- function(
@@ -215,116 +564,184 @@ run_pca_site <- function(
     site_name
 ) {
 
+
   data_site <- data %>%
-    filter(site == site_name) %>%
-    mutate(.pose_row = row_number())
+
+    filter(
+      site == site_name
+    ) %>%
+
+    mutate(
+      .pose_row = row_number()
+    )
+
 
   if (nrow(data_site) < 3) {
+
     stop(
-      "Too few observations for site: ",
-      site_name
+      paste0(
+        "Too few observations for site: ",
+        site_name
+      ),
+      call. = FALSE
     )
+
   }
 
 
-  # ---------------------------------------------------------------------------
-  # Parse residue interactions
-  # ---------------------------------------------------------------------------
+
+  # ============================================================================
+  # 7.1 PARSE TOP RESIDUES
+  # ============================================================================
 
   fingerprint_long <- data_site %>%
+
     select(
       .pose_row,
       `Top residues`
     ) %>%
+
     separate_rows(
       `Top residues`,
       sep = ";\\s*"
     ) %>%
-    mutate(
-      residue = str_extract(
-        `Top residues`,
-        "^[^ ]+"
-      ),
 
-      interaction_count = as.numeric(
-        str_match(
+    mutate(
+
+      residue =
+        str_extract(
           `Top residues`,
-          "\\((\\d+)\\)"
-        )[, 2]
-      )
+          "^[^ ]+"
+        ),
+
+      interaction_count =
+        as.numeric(
+
+          str_match(
+            `Top residues`,
+            "\\((\\d+)\\)"
+          )[
+            ,
+            2
+          ]
+
+        )
+
     ) %>%
+
     filter(
       !is.na(residue),
       !is.na(interaction_count)
     )
 
 
+
   if (nrow(fingerprint_long) == 0) {
+
     stop(
-      "No residue-interaction fingerprints could be parsed for site: ",
-      site_name
+      paste0(
+        "No residue fingerprints could be parsed for site: ",
+        site_name
+      ),
+      call. = FALSE
     )
+
   }
 
 
-  # ---------------------------------------------------------------------------
-  # Pose x residue matrix
-  # ---------------------------------------------------------------------------
+
+  # ============================================================================
+  # 7.2 POSE × RESIDUE MATRIX
+  # ============================================================================
 
   fingerprint_wide <- fingerprint_long %>%
+
     select(
       .pose_row,
       residue,
       interaction_count
     ) %>%
+
     pivot_wider(
-      names_from = residue,
-      values_from = interaction_count,
-      values_fill = 0,
-      values_fn = sum
+
+      names_from =
+        residue,
+
+      values_from =
+        interaction_count,
+
+      values_fill =
+        0,
+
+      values_fn =
+        sum
+
     )
 
 
+
   fingerprint_wide <- data_site %>%
-    select(.pose_row) %>%
+
+    select(
+      .pose_row
+    ) %>%
+
     left_join(
       fingerprint_wide,
       by = ".pose_row"
     )
 
 
+
   fingerprint_wide[
-    is.na(fingerprint_wide)
+    is.na(
+      fingerprint_wide
+    )
   ] <- 0
 
 
-  X <- as.matrix(
+
+  X_raw <- as.matrix(
+
     fingerprint_wide[
       ,
       -1,
       drop = FALSE
     ]
+
   )
 
 
-  # ---------------------------------------------------------------------------
-  # Remove empty poses
-  # ---------------------------------------------------------------------------
+  storage.mode(
+    X_raw
+  ) <- "double"
 
-  valid_rows <- rowSums(X) > 0
+
+
+  # ============================================================================
+  # 7.3 REMOVE EMPTY POSES
+  # ============================================================================
+
+  valid_rows <- rowSums(
+    X_raw
+  ) > 0
 
 
   if (any(!valid_rows)) {
+
     warning(
-      sum(!valid_rows),
-      " pose(s) removed from site ",
-      site_name,
-      " because no residue interactions were parsed."
+      paste0(
+        sum(!valid_rows),
+        " empty pose(s) removed from ",
+        site_name,
+        "."
+      )
     )
+
   }
 
 
-  X <- X[
+  X_raw <- X_raw[
     valid_rows,
     ,
     drop = FALSE
@@ -338,61 +755,103 @@ run_pca_site <- function(
   ]
 
 
-  # ---------------------------------------------------------------------------
-  # Remove residues without variation
-  # ---------------------------------------------------------------------------
+
+  # ============================================================================
+  # 7.4 REMOVE RESIDUES WITHOUT VARIATION
+  # ============================================================================
 
   variable_residues <- apply(
-    X,
+
+    X_raw,
+
     2,
-    function(x) stats::sd(x) > 0
+
+    function(x) {
+
+      sd(
+        x
+      ) > 0
+
+    }
+
   )
 
 
-  X <- X[
+  X_raw <- X_raw[
     ,
     variable_residues,
     drop = FALSE
   ]
 
 
-  if (ncol(X) < 2) {
+  if (ncol(X_raw) < 2) {
+
     stop(
-      "Fewer than two variable residues remain for site: ",
-      site_name
+      paste0(
+        "Fewer than two variable residues remain for site: ",
+        site_name
+      ),
+      call. = FALSE
     )
+
   }
 
 
-  # ---------------------------------------------------------------------------
-  # Normalisation + Hellinger
-  # ---------------------------------------------------------------------------
 
-  X_relative <- X / rowSums(X)
+  # ============================================================================
+  # 7.5 RELATIVE ABUNDANCE
+  # ============================================================================
+
+  X_relative <- X_raw /
+    rowSums(
+      X_raw
+    )
+
+
+
+  # ============================================================================
+  # 7.6 HELLINGER TRANSFORMATION
+  # ============================================================================
 
   X_hellinger <- sqrt(
     X_relative
   )
 
 
-  # ---------------------------------------------------------------------------
-  # PCA
-  # ---------------------------------------------------------------------------
+
+  # ============================================================================
+  # 7.7 PCA
+  # ============================================================================
 
   pca <- prcomp(
+
     X_hellinger,
-    center = TRUE,
-    scale. = FALSE
+
+    center =
+      TRUE,
+
+    scale. =
+      FALSE
+
   )
 
 
-  # ---------------------------------------------------------------------------
-  # Explained variance
-  # ---------------------------------------------------------------------------
+
+  # ============================================================================
+  # 7.8 EXPLAINED VARIANCE
+  # ============================================================================
+
+  eigenvalues <- pca$sdev^2
+
 
   variance_percent <- (
-    pca$sdev^2 /
-      sum(pca$sdev^2)
+
+    eigenvalues /
+
+      sum(
+        eigenvalues
+      )
+
   ) * 100
 
 
@@ -402,48 +861,65 @@ run_pca_site <- function(
 
 
   variance_table <- data.frame(
-    site = site_name,
 
-    PC = paste0(
-      "PC",
-      seq_along(variance_percent)
-    ),
+    site =
+      site_name,
 
-    eigenvalue = pca$sdev^2,
+    PC =
+      paste0(
+        "PC",
+        seq_along(
+          eigenvalues
+        )
+      ),
 
-    variance_percent = variance_percent,
+    eigenvalue =
+      eigenvalues,
 
-    cumulative_percent = cumulative_percent,
+    variance_percent =
+      variance_percent,
 
-    stringsAsFactors = FALSE
+    cumulative_percent =
+      cumulative_percent,
+
+    stringsAsFactors =
+      FALSE
+
   )
 
 
-  # ---------------------------------------------------------------------------
-  # PCA scores
-  # ---------------------------------------------------------------------------
+
+  # ============================================================================
+  # 7.9 PCA SCORES
+  # ============================================================================
 
   score_matrix <- as.data.frame(
     pca$x
   )
 
 
-  scores_all <- bind_cols(
-    data_site %>%
-      select(
-        site,
-        compound,
-        affinity,
-        pose_ID
+  scores_all <- cbind(
+
+    data_site[
+      ,
+      c(
+        "site",
+        "compound",
+        "affinity",
+        "pose_ID"
       ),
+      drop = FALSE
+    ],
 
     score_matrix
+
   )
 
 
-  # ---------------------------------------------------------------------------
-  # PCA loadings
-  # ---------------------------------------------------------------------------
+
+  # ============================================================================
+  # 7.10 PCA LOADINGS
+  # ============================================================================
 
   loading_matrix <- as.data.frame(
     pca$rotation
@@ -451,85 +927,347 @@ run_pca_site <- function(
 
 
   loadings_all <- data.frame(
-    site = site_name,
 
-    residue = rownames(
-      pca$rotation
-    ),
+    site =
+      site_name,
+
+    residue =
+      rownames(
+        pca$rotation
+      ),
 
     loading_matrix,
 
-    row.names = NULL,
+    row.names =
+      NULL,
 
-    check.names = FALSE
+    check.names =
+      FALSE,
+
+    stringsAsFactors =
+      FALSE
+
   )
 
 
-  # ---------------------------------------------------------------------------
-  # PC1-PC2 contribution
-  # ---------------------------------------------------------------------------
+
+  # ============================================================================
+  # 7.11 PC1-PC2 MAGNITUDE
+  # ============================================================================
 
   loadings_PC12 <- loadings_all %>%
+
     mutate(
-      abs_PC1 = abs(PC1),
 
-      abs_PC2 = abs(PC2),
+      abs_PC1 =
+        abs(
+          PC1
+        ),
 
-      contribution_PC12 = sqrt(
-        PC1^2 + PC2^2
-      )
+      abs_PC2 =
+        abs(
+          PC2
+        ),
+
+      contribution_PC12 =
+        sqrt(
+          PC1^2 +
+            PC2^2
+        )
+
     ) %>%
+
     arrange(
-      desc(contribution_PC12)
+      desc(
+        contribution_PC12
+      )
     )
 
 
-  # ---------------------------------------------------------------------------
-  # Centroids
-  # ---------------------------------------------------------------------------
+
+  # ============================================================================
+  # 7.12 RESIDUE CONTRIBUTION TO PC1 AND PC2
+  # ============================================================================
+
+  PC1_denominator <- sum(
+    loadings_all$PC1^2,
+    na.rm = TRUE
+  )
+
+
+  PC2_denominator <- sum(
+    loadings_all$PC2^2,
+    na.rm = TRUE
+  )
+
+
+  PC1_variance <- variance_table$variance_percent[
+    variance_table$PC == "PC1"
+  ][1]
+
+
+  PC2_variance <- variance_table$variance_percent[
+    variance_table$PC == "PC2"
+  ][1]
+
+
+
+  chord_nodes <- data.frame(
+
+    site =
+      site_name,
+
+    residue =
+      loadings_all$residue,
+
+    PC1_loading =
+      loadings_all$PC1,
+
+    PC1_abs_loading =
+      abs(
+        loadings_all$PC1
+      ),
+
+    PC1_direction =
+      ifelse(
+        loadings_all$PC1 >= 0,
+        "Positive",
+        "Negative"
+      ),
+
+    PC1_contribution_percent =
+      (
+        loadings_all$PC1^2 /
+          PC1_denominator
+      ) *
+      100,
+
+    PC1_variance_percent =
+      PC1_variance,
+
+    PC2_loading =
+      loadings_all$PC2,
+
+    PC2_abs_loading =
+      abs(
+        loadings_all$PC2
+      ),
+
+    PC2_direction =
+      ifelse(
+        loadings_all$PC2 >= 0,
+        "Positive",
+        "Negative"
+      ),
+
+    PC2_contribution_percent =
+      (
+        loadings_all$PC2^2 /
+          PC2_denominator
+      ) *
+      100,
+
+    PC2_variance_percent =
+      PC2_variance,
+
+    PC1_PC2_magnitude =
+      sqrt(
+        loadings_all$PC1^2 +
+          loadings_all$PC2^2
+      ),
+
+    stringsAsFactors =
+      FALSE
+
+  )
+
+
+
+  chord_nodes$total_PC12_contribution <-
+
+    chord_nodes$PC1_contribution_percent +
+
+    chord_nodes$PC2_contribution_percent
+
+
+
+  # ============================================================================
+  # 7.13 RESIDUE-RESIDUE CORRELATIONS
+  #
+  # Calculated from SAME Hellinger matrix used in PCA.
+  # ============================================================================
+
+  chord_edges <- calculate_residue_correlations(
+
+    X =
+      X_hellinger,
+
+    site_name =
+      site_name
+
+  )
+
+
+
+  # ============================================================================
+  # 7.14 ADD PCA INFORMATION TO EACH EDGE
+  # ============================================================================
+
+  idx_1 <- match(
+    chord_edges$residue_1,
+    chord_nodes$residue
+  )
+
+
+  idx_2 <- match(
+    chord_edges$residue_2,
+    chord_nodes$residue
+  )
+
+
+
+  chord_edges$residue_1_PC1_loading <-
+    chord_nodes$PC1_loading[
+      idx_1
+    ]
+
+
+  chord_edges$residue_1_PC1_contribution_percent <-
+    chord_nodes$PC1_contribution_percent[
+      idx_1
+    ]
+
+
+  chord_edges$residue_1_PC2_loading <-
+    chord_nodes$PC2_loading[
+      idx_1
+    ]
+
+
+  chord_edges$residue_1_PC2_contribution_percent <-
+    chord_nodes$PC2_contribution_percent[
+      idx_1
+    ]
+
+
+
+  chord_edges$residue_2_PC1_loading <-
+    chord_nodes$PC1_loading[
+      idx_2
+    ]
+
+
+  chord_edges$residue_2_PC1_contribution_percent <-
+    chord_nodes$PC1_contribution_percent[
+      idx_2
+    ]
+
+
+  chord_edges$residue_2_PC2_loading <-
+    chord_nodes$PC2_loading[
+      idx_2
+    ]
+
+
+  chord_edges$residue_2_PC2_contribution_percent <-
+    chord_nodes$PC2_contribution_percent[
+      idx_2
+    ]
+
+
+
+  # ============================================================================
+  # 7.15 COMPOUND CENTROIDS
+  # ============================================================================
 
   centroids <- scores_all %>%
+
     group_by(
       site,
       compound
     ) %>%
+
     summarise(
-      n = n(),
 
-      PC1 = mean(
-        PC1,
-        na.rm = TRUE
-      ),
+      n =
+        n(),
 
-      PC2 = mean(
-        PC2,
-        na.rm = TRUE
-      ),
+      PC1 =
+        mean(
+          PC1,
+          na.rm = TRUE
+        ),
 
-      .groups = "drop"
+      PC2 =
+        mean(
+          PC2,
+          na.rm = TRUE
+        ),
+
+      .groups =
+        "drop"
+
     )
 
+
+
+  # ============================================================================
+  # 7.16 RETURN
+  # ============================================================================
 
   return(
+
     list(
-      site = site_name,
-      pca = pca,
-      variance = variance_table,
-      scores = scores_all,
-      loadings = loadings_all,
-      loadings_PC12 = loadings_PC12,
-      centroids = centroids,
-      fingerprint = X_hellinger
+
+      site =
+        site_name,
+
+      pca =
+        pca,
+
+      variance =
+        variance_table,
+
+      scores =
+        scores_all,
+
+      loadings =
+        loadings_all,
+
+      loadings_PC12 =
+        loadings_PC12,
+
+      centroids =
+        centroids,
+
+      fingerprint_raw =
+        X_raw,
+
+      fingerprint_hellinger =
+        X_hellinger,
+
+      chord_edges =
+        chord_edges,
+
+      chord_nodes =
+        chord_nodes
+
     )
+
   )
+
 }
 
 
+
 # ==============================================================================
-# 9. RUN PCA
+# 8. RUN BZD / BB / GABA
 # ==============================================================================
 
-message("\nRunning PCA for BZD...")
+cat(
+  "\nRunning BZD...\n"
+)
+
 
 pca_BZD <- run_pca_site(
   dat,
@@ -537,7 +1275,10 @@ pca_BZD <- run_pca_site(
 )
 
 
-message("\nRunning PCA for BB...")
+cat(
+  "Running BB...\n"
+)
+
 
 pca_BB <- run_pca_site(
   dat,
@@ -545,7 +1286,10 @@ pca_BB <- run_pca_site(
 )
 
 
-message("\nRunning PCA for GABA...")
+cat(
+  "Running GABA...\n"
+)
+
 
 pca_GABA <- run_pca_site(
   dat,
@@ -553,794 +1297,9 @@ pca_GABA <- run_pca_site(
 )
 
 
-# ==============================================================================
-# 10. MINI-PCA INSET
-# ==============================================================================
-
-make_residue_inset <- function(
-    loadings_df
-) {
-
-  inset_df <- loadings_df %>%
-    mutate(
-      label = residue
-    )
-
-
-  max_x <- max(
-    abs(inset_df$PC1),
-    na.rm = TRUE
-  )
-
-
-  max_y <- max(
-    abs(inset_df$PC2),
-    na.rm = TRUE
-  )
-
-
-  lim_x <- max_x * 1.40
-  lim_y <- max_y * 1.40
-
-
-  if (
-    !is.finite(lim_x) ||
-    lim_x == 0
-  ) {
-    lim_x <- 1
-  }
-
-
-  if (
-    !is.finite(lim_y) ||
-    lim_y == 0
-  ) {
-    lim_y <- 1
-  }
-
-
-  ggplot(
-    inset_df,
-    aes(
-      x = PC1,
-      y = PC2
-    )
-  ) +
-
-
-    # -------------------------------------------------------------------------
-    # Mini axes
-    # -------------------------------------------------------------------------
-
-    geom_hline(
-      yintercept = 0,
-      colour = "grey45",
-      linewidth = 0.28
-    ) +
-
-
-    geom_vline(
-      xintercept = 0,
-      colour = "grey45",
-      linewidth = 0.28
-    ) +
-
-
-    # -------------------------------------------------------------------------
-    # Loading arrows
-    # -------------------------------------------------------------------------
-
-    geom_segment(
-      aes(
-        x = 0,
-        y = 0,
-        xend = PC1,
-        yend = PC2
-      ),
-
-      arrow = grid::arrow(
-        length = grid::unit(
-          0.10,
-          "cm"
-        ),
-        type = "open"
-      ),
-
-      linewidth = 0.28,
-
-      colour = "black"
-    ) +
-
-
-    geom_point(
-      size = 0.55,
-      colour = "black"
-    ) +
-
-
-    # -------------------------------------------------------------------------
-    # Residue labels
-    # -------------------------------------------------------------------------
-
-    ggrepel::geom_text_repel(
-      aes(
-        label = label
-      ),
-
-      seed = 1234,
-
-      size = 2.25,
-
-      colour = "black",
-
-      fontface = "italic",
-
-      box.padding = 0.35,
-
-      point.padding = 0.10,
-
-      segment.colour = "grey55",
-
-      segment.linewidth = 0.18,
-
-      force = 6,
-
-      force_pull = 0.15,
-
-      max.overlaps = Inf,
-
-      min.segment.length = 0,
-
-      max.time = 5
-    ) +
-
-
-    # -------------------------------------------------------------------------
-    # Axis labels INSIDE the inset
-    # -------------------------------------------------------------------------
-
-    annotate(
-      "text",
-
-      x = lim_x * 0.94,
-
-      y = -lim_y * 0.055,
-
-      label = "PC1",
-
-      size = 2.25,
-
-      hjust = 1,
-
-      vjust = 1
-    ) +
-
-
-    annotate(
-      "text",
-
-      x = lim_x * 0.035,
-
-      y = lim_y * 0.94,
-
-      label = "PC2",
-
-      size = 2.25,
-
-      angle = 90,
-
-      hjust = 1,
-
-      vjust = 1
-    ) +
-
-
-    coord_cartesian(
-      xlim = c(
-        -lim_x,
-        lim_x
-      ),
-
-      ylim = c(
-        -lim_y,
-        lim_y
-      ),
-
-      clip = "on",
-
-      expand = FALSE
-    ) +
-
-
-    theme_classic(
-      base_size = 8
-    ) +
-
-
-    theme(
-      axis.title = element_blank(),
-
-      axis.text = element_blank(),
-
-      axis.ticks = element_blank(),
-
-      panel.border = element_blank(),
-
-      plot.background = element_rect(
-        fill = NA,
-        colour = NA
-      ),
-
-      panel.background = element_rect(
-        fill = grDevices::adjustcolor(
-          "white",
-          alpha.f = 0.60
-        ),
-        colour = NA
-      ),
-
-
-      # -----------------------------------------------------------------------
-      # IMPORTANT:
-      # Remove internal margins so inset panel boundaries coincide exactly
-      # with the coordinates supplied by inset_element().
-      # -----------------------------------------------------------------------
-
-      plot.margin = margin(
-        0,
-        0,
-        0,
-        0
-      )
-    )
-}
-
 
 # ==============================================================================
-# 11. SINGLE SHARED LEGEND
-# ==============================================================================
-
-make_shared_legend <- function(
-    observed_compounds
-) {
-
-  legend_df <- data.frame(
-    compound = factor(
-      observed_compounds,
-      levels = observed_compounds
-    ),
-
-    x = seq_along(
-      observed_compounds
-    ),
-
-    y = 1
-  )
-
-
-  legend_plot <- ggplot(
-    legend_df,
-
-    aes(
-      x = x,
-      y = y,
-      colour = compound
-    )
-  ) +
-
-
-    geom_point(
-      size = 2.7,
-      alpha = 1
-    ) +
-
-
-    scale_colour_manual(
-      values = compound_colors,
-
-      limits = observed_compounds,
-
-      breaks = observed_compounds,
-
-      drop = FALSE,
-
-      name = "Compound"
-    ) +
-
-
-    theme_void() +
-
-
-    theme(
-      legend.position = "bottom",
-
-      legend.direction = "horizontal",
-
-      legend.box = "horizontal",
-
-      legend.justification = "center",
-
-      legend.title = element_text(
-        face = "plain",
-        size = 12
-      ),
-
-      legend.text = element_text(
-        face = "plain",
-        size = 11
-      ),
-
-      legend.spacing.x = grid::unit(
-        0.10,
-        "cm"
-      ),
-
-      legend.margin = margin(
-        0,
-        0,
-        0,
-        0
-      ),
-
-      legend.box.margin = margin(
-        0,
-        0,
-        0,
-        0
-      )
-    ) +
-
-
-    guides(
-      colour = guide_legend(
-        nrow = 1,
-
-        byrow = TRUE,
-
-        title.position = "left",
-
-        override.aes = list(
-          size = 3.1,
-          alpha = 1
-        )
-      )
-    )
-
-
-  cowplot::get_legend(
-    legend_plot
-  )
-}
-
-
-# ==============================================================================
-# 12. MAIN PCA FUNCTION
-#
-# IMPORTANT:
-#
-# inset_right = 1.00
-#     aligns the inset with the RIGHT END of the main X axis.
-#
-# inset_top = 1.00
-#     aligns the inset with the TOP of the main Y axis.
-#
-# Because align_to = "panel", these values correspond exactly to the PCA
-# plotting panel and not to the complete ggplot object.
-# ==============================================================================
-
-plot_pca_with_inset <- function(
-
-    pca_result,
-
-    title,
-
-    n_residues = 8,
-
-    inset_width = 0.34,
-
-    inset_height = 0.34
-
-) {
-
-
-  scores <- pca_result$scores
-
-  centroids <- pca_result$centroids
-
-  variance <- pca_result$variance
-
-
-  loadings_top <- pca_result$loadings_PC12 %>%
-    slice_head(
-      n = n_residues
-    )
-
-
-  ellipse_scores <- scores %>%
-    group_by(
-      compound
-    ) %>%
-    filter(
-      n() >= 3
-    ) %>%
-    ungroup()
-
-
-  main_plot <- ggplot(
-    scores,
-    aes(
-      x = PC1,
-      y = PC2
-    )
-  ) +
-
-
-    # -------------------------------------------------------------------------
-    # Reference lines
-    # -------------------------------------------------------------------------
-
-    geom_hline(
-      yintercept = 0,
-      colour = "grey82",
-      linewidth = 0.45
-    ) +
-
-
-    geom_vline(
-      xintercept = 0,
-      colour = "grey82",
-      linewidth = 0.45
-    ) +
-
-
-    # -------------------------------------------------------------------------
-    # Filled ellipses
-    # -------------------------------------------------------------------------
-
-    stat_ellipse(
-      data = ellipse_scores,
-
-      aes(
-        fill = compound,
-        group = compound
-      ),
-
-      geom = "polygon",
-
-      type = "norm",
-
-      level = 0.95,
-
-      alpha = 0.10,
-
-      colour = NA,
-
-      show.legend = FALSE
-    ) +
-
-
-    # -------------------------------------------------------------------------
-    # Ellipse outlines
-    # -------------------------------------------------------------------------
-
-    stat_ellipse(
-      data = ellipse_scores,
-
-      aes(
-        colour = compound,
-        group = compound
-      ),
-
-      type = "norm",
-
-      level = 0.95,
-
-      linewidth = 0.55,
-
-      alpha = 0.95,
-
-      show.legend = FALSE
-    ) +
-
-
-    # -------------------------------------------------------------------------
-    # Individual poses
-    # -------------------------------------------------------------------------
-
-    geom_point(
-      aes(
-        colour = compound
-      ),
-
-      size = 2.1,
-
-      alpha = 0.72,
-
-      show.legend = FALSE
-    ) +
-
-
-    # -------------------------------------------------------------------------
-    # Centroids — diamonds
-    # -------------------------------------------------------------------------
-
-    geom_point(
-      data = centroids,
-
-      aes(
-        x = PC1,
-        y = PC2,
-        fill = compound
-      ),
-
-      inherit.aes = FALSE,
-
-      shape = 23,
-
-      size = 4.2,
-
-      colour = "black",
-
-      stroke = 0.85,
-
-      show.legend = FALSE
-    ) +
-
-
-    scale_colour_manual(
-      values = compound_colors,
-
-      limits = observed_compounds,
-
-      breaks = observed_compounds,
-
-      drop = FALSE,
-
-      name = "Compound"
-    ) +
-
-
-    scale_fill_manual(
-      values = compound_colors,
-
-      limits = observed_compounds,
-
-      breaks = observed_compounds,
-
-      drop = FALSE,
-
-      guide = "none"
-    ) +
-
-
-    # -------------------------------------------------------------------------
-    # Slight expansion
-    # -------------------------------------------------------------------------
-
-    scale_x_continuous(
-      expand = expansion(
-        mult = c(
-          0.08,
-          0.08
-        )
-      )
-    ) +
-
-
-    scale_y_continuous(
-      expand = expansion(
-        mult = c(
-          0.08,
-          0.08
-        )
-      )
-    ) +
-
-
-    coord_cartesian(
-      clip = "on"
-    ) +
-
-
-    labs(
-      title = title,
-
-      x = paste0(
-        "PC1 (",
-        round(
-          variance$variance_percent[
-            variance$PC == "PC1"
-          ],
-          1
-        ),
-        "%)"
-      ),
-
-      y = paste0(
-        "PC2 (",
-        round(
-          variance$variance_percent[
-            variance$PC == "PC2"
-          ],
-          1
-        ),
-        "%)"
-      )
-    ) +
-
-
-    theme_classic(
-      base_size = 13
-    ) +
-
-
-    theme(
-      plot.title = element_text(
-        face = "bold",
-        hjust = 0.5,
-        size = 14
-      ),
-
-      axis.title = element_text(
-        face = "plain"
-      ),
-
-      axis.text = element_text(
-        face = "plain"
-      ),
-
-      legend.position = "none",
-
-      plot.margin = margin(
-        8,
-        8,
-        8,
-        8
-      )
-    )
-
-
-  # ===========================================================================
-  # BUILD INSET
-  # ===========================================================================
-
-  inset_plot <- make_residue_inset(
-    loadings_top
-  )
-
-
-  # ===========================================================================
-  # EXACT TOP-RIGHT ALIGNMENT
-  #
-  # right = 1.00
-  #   → right boundary = right end of main PCA X axis
-  #
-  # top = 1.00
-  #   → upper boundary = top end of main PCA Y axis
-  #
-  # Width and height are then calculated backwards from those boundaries.
-  # ===========================================================================
-
-  inset_left <- 1.00 - inset_width
-
-  inset_bottom <- 1.00 - inset_height
-
-
-  main_plot +
-
-    patchwork::inset_element(
-      inset_plot,
-
-      left = inset_left,
-
-      bottom = inset_bottom,
-
-      right = 1.00,
-
-      top = 1.00,
-
-      align_to = "panel",
-
-      clip = TRUE
-    )
-}
-
-
-# ==============================================================================
-# 13. BUILD PCA PANELS
-#
-# ORDER:
-# BZD → BB → GABA
-# ==============================================================================
-
-plot_BZD <- plot_pca_with_inset(
-  pca_result = pca_BZD,
-
-  title = "DZP - α1/γ2 interface",
-
-  n_residues = 8,
-
-  inset_width = 0.34,
-
-  inset_height = 0.34
-)
-
-
-plot_BB <- plot_pca_with_inset(
-  pca_result = pca_BB,
-
-  title = "BB - α1/β2 interface",
-
-  n_residues = 8,
-
-  inset_width = 0.34,
-
-  inset_height = 0.34
-)
-
-
-plot_GABA <- plot_pca_with_inset(
-  pca_result = pca_GABA,
-
-  title = "GABA - β2/α1 interface",
-
-  n_residues = 8,
-
-  inset_width = 0.34,
-
-  inset_height = 0.34
-)
-
-
-# ==============================================================================
-# 14. SHARED LEGEND
-# ==============================================================================
-
-shared_legend_grob <- make_shared_legend(
-  observed_compounds
-)
-
-
-# ==============================================================================
-# 15. COMBINE PANELS
-# ==============================================================================
-
-pca_panels <- (
-  plot_BZD |
-  plot_BB |
-  plot_GABA
-)
-
-
-# ==============================================================================
-# 16. LEGEND BELOW PANELS
-# ==============================================================================
-
-pca_with_inset <- (
-
-  pca_panels /
-
-    patchwork::wrap_elements(
-      full = shared_legend_grob
-    )
-
-) +
-
-  patchwork::plot_layout(
-    heights = c(
-      1,
-      0.075
-    )
-  )
-
-
-print(
-  pca_with_inset
-)
-
-
-# ==============================================================================
-# 17. COMBINE PCA RESULTS
+# 9. COMBINE PCA RESULTS
 # ==============================================================================
 
 variance_all <- bind_rows(
@@ -1378,355 +1337,674 @@ centroids_all <- bind_rows(
 )
 
 
-site_levels <- c(
-  "BZD",
-  "BB",
-  "GABA"
+top_loadings_PC12 <- loadings_PC12_all %>%
+
+  group_by(
+    site
+  ) %>%
+
+  slice_max(
+    order_by =
+      contribution_PC12,
+    n =
+      10,
+    with_ties =
+      FALSE
+  ) %>%
+
+  ungroup()
+
+
+
+# ==============================================================================
+# 10. COMBINE CHORD RESULTS
+# ==============================================================================
+
+chord_edges_all <- bind_rows(
+  pca_BZD$chord_edges,
+  pca_BB$chord_edges,
+  pca_GABA$chord_edges
 )
 
 
-variance_all <- variance_all %>%
-  mutate(
-    site = factor(
-      site,
-      levels = site_levels
-    )
-  ) %>%
-  arrange(site)
+chord_nodes_all <- bind_rows(
+  pca_BZD$chord_nodes,
+  pca_BB$chord_nodes,
+  pca_GABA$chord_nodes
+)
 
 
-scores_all <- scores_all %>%
-  mutate(
-    site = factor(
-      site,
-      levels = site_levels
-    )
-  ) %>%
-  arrange(site)
+variance_PC12 <- variance_all %>%
 
-
-loadings_all <- loadings_all %>%
-  mutate(
-    site = factor(
-      site,
-      levels = site_levels
-    )
-  ) %>%
-  arrange(site)
-
-
-loadings_PC12_all <- loadings_PC12_all %>%
-  mutate(
-    site = factor(
-      site,
-      levels = site_levels
-    )
-  ) %>%
-  arrange(site)
-
-
-centroids_all <- centroids_all %>%
-  mutate(
-    site = factor(
-      site,
-      levels = site_levels
-    )
-  ) %>%
-  arrange(site)
-
-
-top_loadings_PC12 <- loadings_PC12_all %>%
-  group_by(site) %>%
-  slice_max(
-    order_by = contribution_PC12,
-    n = 10,
-    with_ties = FALSE
-  ) %>%
-  ungroup() %>%
-  arrange(
-    site,
-    desc(contribution_PC12)
+  filter(
+    PC %in%
+      c(
+        "PC1",
+        "PC2"
+      )
   )
 
 
-# ==============================================================================
-# 18. OUTPUT DIRECTORY
-# ==============================================================================
-
-output_dir <- dirname(
-  input_file
-)
-
 
 # ==============================================================================
-# 19. SAVE FIGURE
+# 11. CORRELATION MATRICES
 # ==============================================================================
 
-png_file <- file.path(
-  output_dir,
-  "PCA_interaction_fingerprints_BZD_BB_GABA.png"
+make_correlation_matrix <- function(
+    X,
+    method
+) {
+
+  cor(
+    X,
+    method =
+      method,
+    use =
+      "pairwise.complete.obs"
+  )
+
+}
+
+
+
+pearson_BZD <- make_correlation_matrix(
+  pca_BZD$fingerprint_hellinger,
+  "pearson"
 )
 
 
-tiff_file <- file.path(
-  output_dir,
-  "PCA_interaction_fingerprints_BZD_BB_GABA.tiff"
+pearson_BB <- make_correlation_matrix(
+  pca_BB$fingerprint_hellinger,
+  "pearson"
 )
 
 
-ggsave(
-  filename = png_file,
-  plot = pca_with_inset,
-  width = 15.5,
-  height = 7.4,
-  units = "in",
-  dpi = 400,
-  bg = "white"
+pearson_GABA <- make_correlation_matrix(
+  pca_GABA$fingerprint_hellinger,
+  "pearson"
 )
 
 
-ggsave(
-  filename = tiff_file,
-  plot = pca_with_inset,
-  width = 15.5,
-  height = 7.4,
-  units = "in",
-  dpi = 600,
-  compression = "lzw",
-  bg = "white"
+
+spearman_BZD <- make_correlation_matrix(
+  pca_BZD$fingerprint_hellinger,
+  "spearman"
 )
 
 
-# ==============================================================================
-# 20. SAVE CSV RESULTS
-# ==============================================================================
-
-write.csv(
-  variance_all,
-  file.path(
-    output_dir,
-    "PCA_explained_variance_all_PCs.csv"
-  ),
-  row.names = FALSE
+spearman_BB <- make_correlation_matrix(
+  pca_BB$fingerprint_hellinger,
+  "spearman"
 )
 
 
-write.csv(
-  scores_all,
-  file.path(
-    output_dir,
-    "PCA_scores_all_poses_all_PCs.csv"
-  ),
-  row.names = FALSE
+spearman_GABA <- make_correlation_matrix(
+  pca_GABA$fingerprint_hellinger,
+  "spearman"
 )
 
-
-write.csv(
-  loadings_all,
-  file.path(
-    output_dir,
-    "PCA_loadings_all_residues_all_PCs.csv"
-  ),
-  row.names = FALSE
-)
-
-
-write.csv(
-  loadings_PC12_all,
-  file.path(
-    output_dir,
-    "PCA_loadings_PC1_PC2_contribution.csv"
-  ),
-  row.names = FALSE
-)
-
-
-write.csv(
-  centroids_all,
-  file.path(
-    output_dir,
-    "PCA_compound_centroids_PC1_PC2.csv"
-  ),
-  row.names = FALSE
-)
-
-
-write.csv(
-  top_loadings_PC12,
-  file.path(
-    output_dir,
-    "PCA_top10_residues_PC1_PC2.csv"
-  ),
-  row.names = FALSE
-)
 
 
 # ==============================================================================
-# 21. SAVE EXCEL
+# 12. SAVE PCA_complete_results.xlsx
+#
+# THIS IS THE WORKBOOK USED BY THE CURRENT CHORD-DIAGRAM SCRIPT.
 # ==============================================================================
 
-excel_file <- file.path(
+pca_excel_file <- file.path(
   output_dir,
   "PCA_complete_results.xlsx"
 )
 
 
-wb <- createWorkbook()
+wb_pca <- createWorkbook()
+
 
 
 addWorksheet(
-  wb,
+  wb_pca,
   "Variance_all_PCs"
 )
 
+
 writeData(
-  wb,
+  wb_pca,
   "Variance_all_PCs",
   variance_all
 )
 
 
+
 addWorksheet(
-  wb,
+  wb_pca,
   "Scores_all_PCs"
 )
 
+
 writeData(
-  wb,
+  wb_pca,
   "Scores_all_PCs",
   scores_all
 )
 
 
+
 addWorksheet(
-  wb,
+  wb_pca,
   "Loadings_all_PCs"
 )
 
+
 writeData(
-  wb,
+  wb_pca,
   "Loadings_all_PCs",
   loadings_all
 )
 
 
+
 addWorksheet(
-  wb,
+  wb_pca,
   "Loadings_PC1_PC2"
 )
 
+
 writeData(
-  wb,
+  wb_pca,
   "Loadings_PC1_PC2",
   loadings_PC12_all
 )
 
 
+
 addWorksheet(
-  wb,
+  wb_pca,
   "Centroids_PC1_PC2"
 )
 
+
 writeData(
-  wb,
+  wb_pca,
   "Centroids_PC1_PC2",
   centroids_all
 )
 
 
+
 addWorksheet(
-  wb,
+  wb_pca,
   "Top10_PC1_PC2"
 )
 
+
 writeData(
-  wb,
+  wb_pca,
   "Top10_PC1_PC2",
   top_loadings_PC12
 )
 
 
+
 saveWorkbook(
-  wb,
-  excel_file,
+  wb_pca,
+  pca_excel_file,
   overwrite = TRUE
 )
 
 
+
 # ==============================================================================
-# 22. PRINT KEY RESULTS
+# 13. SAVE chord_diagram.xlsx
 # ==============================================================================
 
-cat("\n============================================================\n")
-cat("PC1, PC2 AND PC3 EXPLAINED VARIANCE\n")
-cat("ORDER: BZD → BB → GABA\n")
-cat("============================================================\n")
-
-
-print(
-  variance_all %>%
-    filter(
-      PC %in% c(
-        "PC1",
-        "PC2",
-        "PC3"
-      )
-    ) %>%
-    select(
-      site,
-      PC,
-      eigenvalue,
-      variance_percent,
-      cumulative_percent
-    )
+chord_excel_file <- file.path(
+  output_dir,
+  "chord_diagram.xlsx"
 )
 
 
-cat("\n============================================================\n")
-cat("TOP 10 RESIDUES IN THE PC1-PC2 PLANE\n")
-cat("ORDER: BZD → BB → GABA\n")
-cat("============================================================\n")
+wb_chord <- createWorkbook()
 
 
-print(
-  top_loadings_PC12 %>%
-    select(
-      site,
-      residue,
-      PC1,
-      PC2,
-      contribution_PC12
-    )
+
+# ==============================================================================
+# README
+# ==============================================================================
+
+addWorksheet(
+  wb_chord,
+  "README"
 )
 
 
+readme_table <- data.frame(
+
+  Item = c(
+
+    "Fingerprint",
+
+    "PCA input",
+
+    "Pearson",
+
+    "Spearman",
+
+    "FDR",
+
+    "Chord_edges",
+
+    "Chord_nodes",
+
+    "PC1 loading",
+
+    "PC2 loading",
+
+    "PC1 contribution",
+
+    "PC2 contribution"
+
+  ),
+
+  Description = c(
+
+    "Interaction counts per residue and docking pose.",
+
+    paste0(
+      "Relative residue-interaction frequencies followed by ",
+      "Hellinger transformation."
+    ),
+
+    paste0(
+      "Linear residue-residue correlation calculated across poses ",
+      "using the Hellinger-transformed fingerprint matrix."
+    ),
+
+    paste0(
+      "Rank-based residue-residue correlation calculated across poses ",
+      "using the same Hellinger-transformed fingerprint matrix."
+    ),
+
+    paste0(
+      "Benjamini-Hochberg false discovery rate correction performed ",
+      "independently within each binding site."
+    ),
+
+    paste0(
+      "One row per residue pair containing Pearson, Spearman, ",
+      "p-values, FDR and PCA information."
+    ),
+
+    paste0(
+      "One row per residue containing PC1/PC2 loadings and ",
+      "relative contribution percentages."
+    ),
+
+    "Coefficient of the residue in PC1.",
+
+    "Coefficient of the residue in PC2.",
+
+    paste0(
+      "Squared PC1 loading normalized across all residues in that ",
+      "binding site; sums to 100%."
+    ),
+
+    paste0(
+      "Squared PC2 loading normalized across all residues in that ",
+      "binding site; sums to 100%."
+    )
+
+  ),
+
+  stringsAsFactors =
+    FALSE
+
+)
+
+
+writeData(
+  wb_chord,
+  "README",
+  readme_table
+)
+
+
+
 # ==============================================================================
-# 23. REPORT OUTPUT FILES
+# CHORD EDGES
 # ==============================================================================
 
-message("\nAnalysis completed successfully.")
+addWorksheet(
+  wb_chord,
+  "Chord_edges"
+)
 
-message("\nPanel order:")
-message("BZD → BB → GABA")
 
-message("\nOutputs saved in:")
-message(output_dir)
+writeData(
+  wb_chord,
+  "Chord_edges",
+  chord_edges_all
+)
 
-message("\nFigure:")
-message("PNG:  ", png_file)
-message("TIFF: ", tiff_file)
-
-message("\nExcel workbook:")
-message(excel_file)
 
 
 # ==============================================================================
-# 24. SESSION INFORMATION
+# CHORD NODES
 # ==============================================================================
 
-cat("\n============================================================\n")
-cat("SESSION INFORMATION\n")
-cat("============================================================\n")
+addWorksheet(
+  wb_chord,
+  "Chord_nodes"
+)
+
+
+writeData(
+  wb_chord,
+  "Chord_nodes",
+  chord_nodes_all
+)
+
+
+
+# ==============================================================================
+# PCA VARIANCE
+# ==============================================================================
+
+addWorksheet(
+  wb_chord,
+  "Variance_PC1_PC2"
+)
+
+
+writeData(
+  wb_chord,
+  "Variance_PC1_PC2",
+  variance_PC12
+)
+
+
+
+# ==============================================================================
+# PEARSON MATRICES
+# ==============================================================================
+
+addWorksheet(
+  wb_chord,
+  "Pearson_BZD"
+)
+
+
+writeData(
+  wb_chord,
+  "Pearson_BZD",
+  data.frame(
+    residue =
+      rownames(
+        pearson_BZD
+      ),
+    pearson_BZD,
+    check.names =
+      FALSE
+  )
+)
+
+
+
+addWorksheet(
+  wb_chord,
+  "Pearson_BB"
+)
+
+
+writeData(
+  wb_chord,
+  "Pearson_BB",
+  data.frame(
+    residue =
+      rownames(
+        pearson_BB
+      ),
+    pearson_BB,
+    check.names =
+      FALSE
+  )
+)
+
+
+
+addWorksheet(
+  wb_chord,
+  "Pearson_GABA"
+)
+
+
+writeData(
+  wb_chord,
+  "Pearson_GABA",
+  data.frame(
+    residue =
+      rownames(
+        pearson_GABA
+      ),
+    pearson_GABA,
+    check.names =
+      FALSE
+  )
+)
+
+
+
+# ==============================================================================
+# SPEARMAN MATRICES
+# ==============================================================================
+
+addWorksheet(
+  wb_chord,
+  "Spearman_BZD"
+)
+
+
+writeData(
+  wb_chord,
+  "Spearman_BZD",
+  data.frame(
+    residue =
+      rownames(
+        spearman_BZD
+      ),
+    spearman_BZD,
+    check.names =
+      FALSE
+  )
+)
+
+
+
+addWorksheet(
+  wb_chord,
+  "Spearman_BB"
+)
+
+
+writeData(
+  wb_chord,
+  "Spearman_BB",
+  data.frame(
+    residue =
+      rownames(
+        spearman_BB
+      ),
+    spearman_BB,
+    check.names =
+      FALSE
+  )
+)
+
+
+
+addWorksheet(
+  wb_chord,
+  "Spearman_GABA"
+)
+
+
+writeData(
+  wb_chord,
+  "Spearman_GABA",
+  data.frame(
+    residue =
+      rownames(
+        spearman_GABA
+      ),
+    spearman_GABA,
+    check.names =
+      FALSE
+  )
+)
+
+
+
+# ==============================================================================
+# 14. BASIC XLSX FORMATTING
+# ==============================================================================
+
+header_style <- createStyle(
+  textDecoration = "bold",
+  halign = "center",
+  valign = "center",
+  border = "Bottom"
+)
+
+
+for (sheet_name in names(wb_chord)) {
+
+  try(
+    freezePane(
+      wb_chord,
+      sheet = sheet_name,
+      firstRow = TRUE
+    ),
+    silent = TRUE
+  )
+
+}
+
+
+
+# ==============================================================================
+# 15. SAVE chord_diagram.xlsx
+# ==============================================================================
+
+saveWorkbook(
+  wb_chord,
+  chord_excel_file,
+  overwrite = TRUE
+)
+
+
+
+# ==============================================================================
+# 16. REPORT RESULTS
+# ==============================================================================
+
+cat(
+  "\n============================================================\n"
+)
+
+
+cat(
+  "ANALYSIS COMPLETED SUCCESSFULLY\n"
+)
+
+
+cat(
+  "============================================================\n"
+)
+
+
+
+cat(
+  "\nPCA workbook:\n",
+  pca_excel_file,
+  "\n",
+  sep = ""
+)
+
+
+cat(
+  "\nChord workbook:\n",
+  chord_excel_file,
+  "\n",
+  sep = ""
+)
+
+
+
+cat(
+  "\nPC1 / PC2 explained variance:\n"
+)
+
+
+print(
+
+  variance_PC12[
+    ,
+    c(
+      "site",
+      "PC",
+      "eigenvalue",
+      "variance_percent",
+      "cumulative_percent"
+    ),
+    drop = FALSE
+  ]
+
+)
+
+
+
+cat(
+  "\nNumber of residue pairs tested:\n"
+)
+
+
+for (site_name in site_levels) {
+
+  n_pairs <- sum(
+    chord_edges_all$site ==
+      site_name
+  )
+
+
+  n_sig <- sum(
+
+    chord_edges_all$site ==
+      site_name &
+
+      chord_edges_all$pearson_significant_005,
+
+    na.rm = TRUE
+
+  )
+
+
+  cat(
+    site_name,
+    ": ",
+    n_pairs,
+    " pairs; ",
+    n_sig,
+    " Pearson BH-FDR significant pairs\n",
+    sep = ""
+  )
+
+}
+
+
+
+cat(
+  "\nSession information:\n"
+)
+
 
 print(
   sessionInfo()
