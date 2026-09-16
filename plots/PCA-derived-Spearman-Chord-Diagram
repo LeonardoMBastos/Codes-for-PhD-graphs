@@ -2,6 +2,13 @@
 # CHORD DIAGRAM
 # TOP 10 MOST FREQUENT RESIDUES
 # SPEARMAN CORRELATIONS + PCA LOADING RINGS
+#
+#
+# 1. Adicionar resultados da PCA
+#
+# 2. Adicionar planilha original de residues info
+#
+#
 # ==============================================================================
 
 
@@ -23,21 +30,28 @@ sector_gap_degree <- 1.2
 
 
 # ------------------------------------------------------------------------------
-# LEGEND WIDTH
-#
-# The gradient is centered and approximately matches the internal diameter
-# of the chord region where the ribbons are displayed.
-#
-# 0.40 = 40% of the complete plotting width
+# SHARED TEXT SIZE
 # ------------------------------------------------------------------------------
 
-legend_gradient_width <- 0.40
+text_cex <- 0.98
+
+
+# ------------------------------------------------------------------------------
+# LEGEND WIDTH
+#
+# Previous width = 0.40
+# New width = 4/5 × 0.40 = 0.32
+# ------------------------------------------------------------------------------
+
+legend_gradient_width <- 0.32
 
 legend_x_left  <- 0.5 - legend_gradient_width / 2
 legend_x_right <- 0.5 + legend_gradient_width / 2
 
 
-# Export
+# ------------------------------------------------------------------------------
+# EXPORT
+# ------------------------------------------------------------------------------
 
 png_width  <- 4400
 png_height <- 3500
@@ -1290,11 +1304,6 @@ for (
 # 16. COLOUR SCALES
 # ==============================================================================
 
-# Spearman
-# -1 = red
-#  0 = white
-# +1 = blue
-
 correlation_col_fun <- circlize::colorRamp2(
 
   c(
@@ -1310,11 +1319,6 @@ correlation_col_fun <- circlize::colorRamp2(
   )
 )
 
-
-# PCA loadings
-# -1 = orange
-#  0 = white
-# +1 = green
 
 loading_col_fun <- circlize::colorRamp2(
 
@@ -1370,8 +1374,6 @@ prepare_site_plot <- function(
     drop = FALSE
   ]
 
-
-  # Highest PC1 loading -> lowest PC1 loading
 
   nodes_plot <- nodes_site[
 
@@ -1497,6 +1499,7 @@ allocate_ribbon_intervals <- function(
     !is.finite(maximum_total) ||
     maximum_total <= 0
   ) {
+
     maximum_total <- 1
   }
 
@@ -1573,8 +1576,11 @@ allocate_ribbon_intervals <- function(
 
 
   list(
-    edges = E,
-    maximum_total = maximum_total
+    edges =
+      E,
+
+    maximum_total =
+      maximum_total
   )
 }
 
@@ -1617,6 +1623,24 @@ draw_main_chord <- function(
 
   maximum_total <-
     ribbon_data$maximum_total
+
+
+  # ---------------------------------------------------------------------------
+  # PCA EXPLAINED VARIANCE
+  # ---------------------------------------------------------------------------
+
+  PC1_variance <- get_variance_percent(
+    variance_all,
+    site_name,
+    "PC1"
+  )
+
+
+  PC2_variance <- get_variance_percent(
+    variance_all,
+    site_name,
+    "PC2"
+  )
 
 
   par(
@@ -1756,7 +1780,7 @@ draw_main_chord <- function(
         ),
 
         cex =
-          0.98,
+          text_cex,
 
         font =
           1,
@@ -1954,8 +1978,12 @@ draw_main_chord <- function(
           NA
       )
     }
-  }
+  )
 
+
+  # ===========================================================================
+  # MAIN TITLE
+  # ===========================================================================
 
   title(
 
@@ -1976,6 +2004,73 @@ draw_main_chord <- function(
   )
 
 
+  # ===========================================================================
+  # UPPER-RIGHT PC INFORMATION
+  #
+  # PC1 directly above PC2
+  # ===========================================================================
+
+  pc_information <- c(
+
+    paste0(
+      "PC1 (outer ring): ",
+      round(
+        PC1_variance,
+        1
+      ),
+      " %VE"
+    ),
+
+    paste0(
+      "PC2 (inner ring): ",
+      round(
+        PC2_variance,
+        1
+      ),
+      " %VE"
+    )
+  )
+
+
+  legend(
+
+    x =
+      "topright",
+
+    legend =
+      pc_information,
+
+    bty =
+      "n",
+
+    cex =
+      text_cex,
+
+    text.col =
+      "black",
+
+    text.font =
+      1,
+
+    x.intersp =
+      0,
+
+    y.intersp =
+      1.05,
+
+    inset = c(
+      0.015,
+      0.015
+    ),
+
+    xjust =
+      1,
+
+    yjust =
+      1
+  )
+
+
   circos.clear()
 }
 
@@ -1991,8 +2086,7 @@ draw_gradient_bar <- function(
     y_top,
     colour_function,
     title_text,
-    title_cex = 0.84,
-    title_offset = 0.095
+    title_offset = 0.105
 ) {
 
 
@@ -2044,8 +2138,6 @@ draw_gradient_bar <- function(
   }
 
 
-  # Legend title
-
   text(
 
     x =
@@ -2062,7 +2154,7 @@ draw_gradient_bar <- function(
       title_text,
 
     cex =
-      title_cex,
+      text_cex,
 
     font =
       1,
@@ -2071,8 +2163,6 @@ draw_gradient_bar <- function(
       font_family
   )
 
-
-  # -1 / 0 / +1
 
   text(
 
@@ -2087,7 +2177,7 @@ draw_gradient_bar <- function(
 
     y =
       y_bottom -
-      0.055,
+      0.065,
 
     labels = c(
       "-1",
@@ -2096,7 +2186,7 @@ draw_gradient_bar <- function(
     ),
 
     cex =
-      0.78,
+      text_cex,
 
     font =
       1,
@@ -2153,59 +2243,9 @@ draw_bottom_legends <- function(
   )
 
 
-  PC1_variance <- get_variance_percent(
-
-    variance_all,
-
-    site_name,
-
-    "PC1"
-  )
-
-
-  PC2_variance <- get_variance_percent(
-
-    variance_all,
-
-    site_name,
-
-    "PC2"
-  )
-
-
   # ===========================================================================
-  # PCA LOADINGS LEGEND
-  #
-  # REQUIRED TEXT BREAK:
-  #
-  # Principal components loadings of
-  # PC1 (outer ring; X %VE) and PC2 (inner ring; Y %VE)
-  #
-  # Gradient length approximately equals the internal diameter
-  # of the chord/ribbon region.
+  # PRINCIPAL COMPONENT LOADING
   # ===========================================================================
-
-  loading_title <- paste0(
-
-    "Principal components loadings of\n",
-
-    "PC1 (outer ring; ",
-
-    round(
-      PC1_variance,
-      1
-    ),
-
-    " %VE) and PC2 (inner ring; ",
-
-    round(
-      PC2_variance,
-      1
-    ),
-
-    " %VE)"
-  )
-
 
   draw_gradient_bar(
 
@@ -2225,18 +2265,15 @@ draw_bottom_legends <- function(
       loading_col_fun,
 
     title_text =
-      loading_title,
-
-    title_cex =
-      0.82,
+      "Principal component loading",
 
     title_offset =
-      0.125
+      0.105
   )
 
 
   # ===========================================================================
-  # SPEARMAN LEGEND
+  # SPEARMAN CORRELATION
   # ===========================================================================
 
   draw_gradient_bar(
@@ -2259,11 +2296,8 @@ draw_bottom_legends <- function(
     title_text =
       "Spearman correlation (ρ)",
 
-    title_cex =
-      0.84,
-
     title_offset =
-      0.095
+      0.105
   )
 }
 
@@ -2462,8 +2496,6 @@ for (
   )
 
 
-  # Significant Spearman correlations
-
   write.csv(
 
     plot_data$edges,
@@ -2481,8 +2513,6 @@ for (
       FALSE
   )
 
-
-  # Top 10 residues
 
   write.csv(
 
@@ -2799,7 +2829,7 @@ cat(
 
 
 cat(
-  "Legend gradients: centered; width approximates internal chord diameter\n"
+  "PC information: PC1 directly above PC2\n"
 )
 
 
