@@ -1,0 +1,3016 @@
+# ==============================================================================
+# CHORD DIAGRAM
+# TOP 10 MOST FREQUENT RESIDUES
+# SPEARMAN CORRELATIONS + PCA LOADING RINGS
+# VERTICAL LEGENDS AT RIGHT SIDE
+# ==============================================================================
+
+
+# ==============================================================================
+# 0. SETTINGS
+# ==============================================================================
+
+maximum_FDR <- 0.05
+
+top_n_residues <- 10
+
+min_abs_correlation <- 0.00
+
+font_family <- "sans"
+
+output_background <- "white"
+
+sector_gap_degree <- 1.2
+
+
+# ------------------------------------------------------------------------------
+# SHARED TEXT SIZE
+# ------------------------------------------------------------------------------
+
+text_cex <- 0.98
+
+
+# ------------------------------------------------------------------------------
+# CHORD TRACK DIMENSIONS
+# ------------------------------------------------------------------------------
+
+residue_track_height <- 0.18
+
+PC1_track_height <- 0.052
+
+PC2_track_height <- 0.052
+
+
+# ------------------------------------------------------------------------------
+# VERTICAL LEGEND DIMENSIONS
+#
+# Height:
+# approximately 4/5 of the diameter of the INNER RING
+#
+# Width:
+# 2/5 of the previous vertical legend width
+# ------------------------------------------------------------------------------
+
+estimated_track_margins <- 0.012
+
+estimated_inner_radius <-
+  1 -
+  residue_track_height -
+  PC1_track_height -
+  PC2_track_height -
+  estimated_track_margins
+
+
+legend_gradient_height <-
+  2 *
+  estimated_inner_radius *
+  (4 / 5)
+
+
+legend_y_bottom <-
+  -legend_gradient_height / 2
+
+
+legend_y_top <-
+  legend_gradient_height / 2
+
+
+# Previous vertical width was 0.028 on a 0-1 plotting scale.
+# Convert approximately to the chord-coordinate scale (~2.06 units),
+# then retain 2/5 of that visual width.
+
+previous_vertical_width_in_chord_coordinates <-
+  0.028 * 2.06
+
+
+legend_bar_width <-
+  previous_vertical_width_in_chord_coordinates *
+  (2 / 5)
+
+
+# ------------------------------------------------------------------------------
+# LEGEND POSITIONS
+#
+# Both legend bars are positioned to the RIGHT of the circle.
+# They share the same vertical center as the chord diagram.
+# ------------------------------------------------------------------------------
+
+loading_legend_center_x <- 1.18
+
+correlation_legend_center_x <- 1.50
+
+
+# ------------------------------------------------------------------------------
+# PC1 / PC2 INFORMATION POSITION
+# ------------------------------------------------------------------------------
+
+PC_info_x <- 1.08
+
+PC1_info_y <- 0.98
+
+PC2_info_y <- 0.90
+
+
+# ------------------------------------------------------------------------------
+# EXPORT
+# ------------------------------------------------------------------------------
+
+png_width <- 4400
+png_height <- 3500
+png_res <- 400
+
+tiff_width <- 6600
+tiff_height <- 5250
+tiff_res <- 600
+
+
+# ==============================================================================
+# 1. PACKAGES
+# ==============================================================================
+
+required_packages <- c(
+  "circlize",
+  "openxlsx"
+)
+
+missing_packages <- required_packages[
+  !vapply(
+    required_packages,
+    requireNamespace,
+    logical(1),
+    quietly = TRUE
+  )
+]
+
+if (length(missing_packages) > 0) {
+
+  install.packages(
+    missing_packages
+  )
+}
+
+library(circlize)
+library(openxlsx)
+
+
+# ==============================================================================
+# 2. HELPERS
+# ==============================================================================
+
+safe_num <- function(x) {
+
+  suppressWarnings(
+    as.numeric(
+      gsub(
+        ",",
+        ".",
+        as.character(x),
+        fixed = TRUE
+      )
+    )
+  )
+}
+
+
+normalize_site <- function(x) {
+
+  y <- toupper(
+    trimws(
+      as.character(x)
+    )
+  )
+
+
+  y[
+    y %in% c(
+      "BZD",
+      "BENZODIAZEPINE",
+      "BENZODIAZEPINES",
+      "BENZODIAZEPINE SITE",
+      "BZD SITE"
+    )
+  ] <- "BZD"
+
+
+  y[
+    y %in% c(
+      "BB",
+      "BARBITURATE",
+      "BARBITURATES",
+      "BARBITURATE SITE",
+      "BARBITURATES SITE"
+    )
+  ] <- "BB"
+
+
+  y[
+    y %in% c(
+      "GABA",
+      "GABA SITE",
+      "ORTHOSTERIC",
+      "ORTHOSTERIC SITE"
+    )
+  ] <- "GABA"
+
+
+  y
+}
+
+
+normalize_residue <- function(x) {
+
+  toupper(
+    gsub(
+      "\\s+",
+      "",
+      trimws(
+        as.character(x)
+      )
+    )
+  )
+}
+
+
+get_pc_columns <- function(df) {
+
+  pcs <- grep(
+    "^PC[0-9]+$",
+    names(df),
+    value = TRUE
+  )
+
+
+  pcs[
+    order(
+      as.integer(
+        sub(
+          "^PC",
+          "",
+          pcs
+        )
+      )
+    )
+  ]
+}
+
+
+get_variance_percent <- function(
+    variance_df,
+    site_name,
+    pc_name
+) {
+
+  idx <- which(
+    variance_df$site == site_name &
+      variance_df$PC == pc_name
+  )
+
+
+  if (length(idx) == 0) {
+
+    return(
+      NA_real_
+    )
+  }
+
+
+  safe_num(
+    variance_df$variance_percent[
+      idx[1]
+    ]
+  )
+}
+
+
+create_output_directory <- function(
+    input_file
+) {
+
+  output_dir <- file.path(
+    dirname(input_file),
+    "Chord_Diagram_Output"
+  )
+
+
+  dir.create(
+    output_dir,
+    recursive = TRUE,
+    showWarnings = FALSE
+  )
+
+
+  output_dir
+}
+
+
+safe_output_file <- function(
+    directory,
+    filename
+) {
+
+  candidate <- file.path(
+    directory,
+    filename
+  )
+
+
+  if (!file.exists(candidate)) {
+
+    return(
+      candidate
+    )
+  }
+
+
+  deleted <- tryCatch(
+    {
+
+      unlink(
+        candidate,
+        force = TRUE
+      )
+
+
+      !file.exists(candidate)
+
+    },
+
+    error = function(e) {
+
+      FALSE
+    }
+  )
+
+
+  if (deleted) {
+
+    return(
+      candidate
+    )
+  }
+
+
+  extension <- tools::file_ext(
+    filename
+  )
+
+
+  base_name <- tools::file_path_sans_ext(
+    basename(
+      filename
+    )
+  )
+
+
+  timestamp <- format(
+    Sys.time(),
+    "%Y%m%d_%H%M%S"
+  )
+
+
+  file.path(
+    directory,
+    paste0(
+      base_name,
+      "_",
+      timestamp,
+      ".",
+      extension
+    )
+  )
+}
+
+
+# ==============================================================================
+# 3. SELECT PCA WORKBOOK
+# ==============================================================================
+
+cat(
+  "\n============================================================\n",
+  "SELECT PCA_complete_results.xlsx\n",
+  "============================================================\n\n",
+  sep = ""
+)
+
+
+pca_file <- file.choose()
+
+
+# ==============================================================================
+# 4. READ PCA WORKBOOK
+# ==============================================================================
+
+workbook_sheets <- openxlsx::getSheetNames(
+  pca_file
+)
+
+
+required_sheets <- c(
+  "Variance_all_PCs",
+  "Scores_all_PCs",
+  "Loadings_all_PCs"
+)
+
+
+missing_sheets <- setdiff(
+  required_sheets,
+  workbook_sheets
+)
+
+
+if (length(missing_sheets) > 0) {
+
+  stop(
+    paste0(
+      "Missing PCA worksheet(s): ",
+      paste(
+        missing_sheets,
+        collapse = ", "
+      )
+    ),
+    call. = FALSE
+  )
+}
+
+
+variance_all <- openxlsx::read.xlsx(
+  pca_file,
+  sheet = "Variance_all_PCs",
+  check.names = FALSE
+)
+
+
+scores_all <- openxlsx::read.xlsx(
+  pca_file,
+  sheet = "Scores_all_PCs",
+  check.names = FALSE
+)
+
+
+loadings_all <- openxlsx::read.xlsx(
+  pca_file,
+  sheet = "Loadings_all_PCs",
+  check.names = FALSE
+)
+
+
+# ==============================================================================
+# 5. CLEAN PCA
+# ==============================================================================
+
+variance_all$site <- normalize_site(
+  variance_all$site
+)
+
+
+variance_all$PC <- trimws(
+  as.character(
+    variance_all$PC
+  )
+)
+
+
+scores_all$site <- normalize_site(
+  scores_all$site
+)
+
+
+loadings_all$site <- normalize_site(
+  loadings_all$site
+)
+
+
+loadings_all$residue <- normalize_residue(
+  loadings_all$residue
+)
+
+
+for (nm in names(variance_all)) {
+
+  if (!nm %in% c(
+    "site",
+    "PC"
+  )) {
+
+    variance_all[[nm]] <- safe_num(
+      variance_all[[nm]]
+    )
+  }
+}
+
+
+for (nm in get_pc_columns(scores_all)) {
+
+  scores_all[[nm]] <- safe_num(
+    scores_all[[nm]]
+  )
+}
+
+
+for (nm in get_pc_columns(loadings_all)) {
+
+  loadings_all[[nm]] <- safe_num(
+    loadings_all[[nm]]
+  )
+}
+
+
+# ==============================================================================
+# 6. SITE DEFINITIONS
+# ==============================================================================
+
+site_order <- c(
+  "BZD",
+  "BB",
+  "GABA"
+)
+
+
+sites_available <- site_order[
+  site_order %in%
+    unique(
+      loadings_all$site
+    )
+]
+
+
+if (length(sites_available) == 0) {
+
+  stop(
+    "No BZD, BB or GABA PCA data found.",
+    call. = FALSE
+  )
+}
+
+
+site_titles <- c(
+
+  "BZD" =
+    "BZD - α1/γ2 interface",
+
+  "BB" =
+    "BB - α1/β2 interface",
+
+  "GABA" =
+    "GABA - β2/α1 interface"
+)
+
+
+# ==============================================================================
+# 7. SELECT ORIGINAL CSV
+# ==============================================================================
+
+cat(
+  "\n============================================================\n",
+  "SELECT ORIGINAL LNpjt-Residues-Results CSV\n",
+  "============================================================\n\n",
+  sep = ""
+)
+
+
+raw_file <- file.choose()
+
+
+# ==============================================================================
+# 8. READ ORIGINAL CSV
+# ==============================================================================
+
+raw_data <- read.csv(
+  raw_file,
+  check.names = FALSE,
+  stringsAsFactors = FALSE
+)
+
+
+required_raw_columns <- c(
+  "site",
+  "Top residues"
+)
+
+
+missing_raw <- setdiff(
+  required_raw_columns,
+  names(raw_data)
+)
+
+
+if (length(missing_raw) > 0) {
+
+  stop(
+    paste0(
+      "Missing raw-data column(s): ",
+      paste(
+        missing_raw,
+        collapse = ", "
+      )
+    ),
+    call. = FALSE
+  )
+}
+
+
+raw_data$site <- normalize_site(
+  raw_data$site
+)
+
+
+# ==============================================================================
+# 9. PARSE TOP RESIDUES
+# ==============================================================================
+
+parse_top_residues <- function(x) {
+
+  result <- numeric(0)
+
+
+  if (
+    is.na(x) ||
+    trimws(x) == ""
+  ) {
+
+    return(
+      result
+    )
+  }
+
+
+  pieces <- strsplit(
+    as.character(x),
+    ";",
+    fixed = TRUE
+  )[[1]]
+
+
+  for (piece in pieces) {
+
+    piece <- trimws(
+      piece
+    )
+
+
+    matched <- regexec(
+      "^([^[:space:]]+)\\s*\\(([0-9]+(?:\\.[0-9]+)?)\\)$",
+      piece
+    )
+
+
+    captured <- regmatches(
+      piece,
+      matched
+    )[[1]]
+
+
+    if (length(captured) == 3) {
+
+      residue_name <- normalize_residue(
+        captured[2]
+      )
+
+
+      contact_value <- safe_num(
+        captured[3]
+      )
+
+
+      if (
+        is.finite(contact_value) &&
+        contact_value > 0
+      ) {
+
+        if (residue_name %in% names(result)) {
+
+          result[residue_name] <-
+            result[residue_name] +
+            contact_value
+
+        } else {
+
+          result[residue_name] <-
+            contact_value
+        }
+      }
+    }
+  }
+
+
+  result
+}
+
+
+# ==============================================================================
+# 10. BUILD ORIGINAL POSE × RESIDUE MATRIX
+# ==============================================================================
+
+build_raw_fingerprint <- function(
+    site_name
+) {
+
+
+  raw_site <- raw_data[
+    raw_data$site == site_name,
+    ,
+    drop = FALSE
+  ]
+
+
+  if (nrow(raw_site) == 0) {
+
+    stop(
+      paste0(
+        "No raw observations found for site: ",
+        site_name
+      ),
+      call. = FALSE
+    )
+  }
+
+
+  parsed_rows <- lapply(
+    raw_site$`Top residues`,
+    parse_top_residues
+  )
+
+
+  all_raw_residues <- sort(
+    unique(
+      unlist(
+        lapply(
+          parsed_rows,
+          names
+        )
+      )
+    )
+  )
+
+
+  if (length(all_raw_residues) == 0) {
+
+    stop(
+      paste0(
+        "No residues could be parsed from 'Top residues' for ",
+        site_name
+      ),
+      call. = FALSE
+    )
+  }
+
+
+  X <- matrix(
+
+    0,
+
+    nrow =
+      nrow(raw_site),
+
+    ncol =
+      length(all_raw_residues),
+
+    dimnames = list(
+      NULL,
+      all_raw_residues
+    )
+  )
+
+
+  for (
+    i in seq_along(
+      parsed_rows
+    )
+  ) {
+
+    current <- parsed_rows[[i]]
+
+
+    if (length(current) == 0) {
+
+      next
+    }
+
+
+    X[
+      i,
+      names(current)
+    ] <- current
+  }
+
+
+  pca_residues <- loadings_all$residue[
+    loadings_all$site == site_name
+  ]
+
+
+  common_residues <- intersect(
+    colnames(X),
+    pca_residues
+  )
+
+
+  missing_from_pca <- setdiff(
+    colnames(X),
+    pca_residues
+  )
+
+
+  if (length(common_residues) == 0) {
+
+    stop(
+      paste0(
+        "ERROR: no raw residues matched PCA loadings for ",
+        site_name,
+        "."
+      ),
+      call. = FALSE
+    )
+  }
+
+
+  if (length(missing_from_pca) > 0) {
+
+    warning(
+      paste0(
+        site_name,
+        ": ",
+        length(missing_from_pca),
+        " raw residue(s) are absent from PCA loadings and will be ignored."
+      )
+    )
+  }
+
+
+  X <- X[
+    ,
+    common_residues,
+    drop = FALSE
+  ]
+
+
+  if (sum(X, na.rm = TRUE) <= 0) {
+
+    stop(
+      paste0(
+        "ERROR: reconstructed contact matrix for ",
+        site_name,
+        " contains no contacts."
+      ),
+      call. = FALSE
+    )
+  }
+
+
+  X
+}
+
+
+# ==============================================================================
+# 11. HELLINGER TRANSFORMATION
+# ==============================================================================
+
+hellinger_transform <- function(X) {
+
+  row_totals <- rowSums(
+    X,
+    na.rm = TRUE
+  )
+
+
+  if (any(row_totals <= 0)) {
+
+    stop(
+      "At least one pose has total residue-contact count <= 0.",
+      call. = FALSE
+    )
+  }
+
+
+  relative_matrix <- X /
+    row_totals
+
+
+  sqrt(
+    relative_matrix
+  )
+}
+
+
+# ==============================================================================
+# 12. RESIDUE FREQUENCY
+# ==============================================================================
+
+calculate_residue_frequency <- function(
+    site_name,
+    X_raw
+) {
+
+
+  frequency_n <- colSums(
+    X_raw > 0
+  )
+
+
+  frequency_percent <-
+    frequency_n /
+    nrow(X_raw) *
+    100
+
+
+  total_contacts <- colSums(
+    X_raw
+  )
+
+
+  result <- data.frame(
+
+    site =
+      site_name,
+
+    residue =
+      colnames(X_raw),
+
+    n_poses =
+      nrow(X_raw),
+
+    frequency_n =
+      as.numeric(
+        frequency_n
+      ),
+
+    frequency_percent =
+      as.numeric(
+        frequency_percent
+      ),
+
+    total_contacts =
+      as.numeric(
+        total_contacts
+      ),
+
+    stringsAsFactors =
+      FALSE
+  )
+
+
+  result <- result[
+    order(
+      -result$frequency_n,
+      -result$total_contacts,
+      result$residue
+    ),
+    ,
+    drop = FALSE
+  ]
+
+
+  result$frequency_rank <-
+    seq_len(
+      nrow(result)
+    )
+
+
+  top <- head(
+    result,
+    min(
+      top_n_residues,
+      nrow(result)
+    )
+  )
+
+
+  list(
+    all = result,
+    top = top
+  )
+}
+
+
+# ==============================================================================
+# 13. PCA NODE DATA
+# ==============================================================================
+
+calculate_nodes <- function(
+    site_name,
+    selected_residues,
+    frequency_table
+) {
+
+
+  load_site <- loadings_all[
+    loadings_all$site == site_name,
+    ,
+    drop = FALSE
+  ]
+
+
+  idx <- match(
+    selected_residues,
+    load_site$residue
+  )
+
+
+  if (any(is.na(idx))) {
+
+    stop(
+      paste0(
+        "Selected residue missing from PCA loadings for ",
+        site_name
+      ),
+      call. = FALSE
+    )
+  }
+
+
+  pc1 <- safe_num(
+    load_site$PC1[
+      idx
+    ]
+  )
+
+
+  pc2 <- safe_num(
+    load_site$PC2[
+      idx
+    ]
+  )
+
+
+  all_pc1 <- safe_num(
+    load_site$PC1
+  )
+
+
+  all_pc2 <- safe_num(
+    load_site$PC2
+  )
+
+
+  den1 <- sum(
+    all_pc1^2,
+    na.rm = TRUE
+  )
+
+
+  den2 <- sum(
+    all_pc2^2,
+    na.rm = TRUE
+  )
+
+
+  nodes <- data.frame(
+
+    site =
+      site_name,
+
+    residue =
+      selected_residues,
+
+    PC1_loading =
+      pc1,
+
+    PC2_loading =
+      pc2,
+
+    PC1_contribution_percent =
+      (pc1^2 / den1) *
+      100,
+
+    PC2_contribution_percent =
+      (pc2^2 / den2) *
+      100,
+
+    stringsAsFactors =
+      FALSE
+  )
+
+
+  freq_idx <- match(
+    nodes$residue,
+    frequency_table$residue
+  )
+
+
+  nodes$frequency_rank <-
+    frequency_table$frequency_rank[
+      freq_idx
+    ]
+
+
+  nodes$frequency_n <-
+    frequency_table$frequency_n[
+      freq_idx
+    ]
+
+
+  nodes$frequency_percent <-
+    frequency_table$frequency_percent[
+      freq_idx
+    ]
+
+
+  nodes$total_contacts <-
+    frequency_table$total_contacts[
+      freq_idx
+    ]
+
+
+  nodes
+}
+
+
+# ==============================================================================
+# 14. SPEARMAN ANALYSIS
+# ==============================================================================
+
+calculate_site_analysis <- function(
+    site_name
+) {
+
+
+  X_raw <- build_raw_fingerprint(
+    site_name
+  )
+
+
+  frequency_result <- calculate_residue_frequency(
+    site_name,
+    X_raw
+  )
+
+
+  top_frequency <-
+    frequency_result$top
+
+
+  selected_residues <-
+    top_frequency$residue
+
+
+  X_hellinger <- hellinger_transform(
+    X_raw
+  )
+
+
+  X_top <- X_hellinger[
+    ,
+    selected_residues,
+    drop = FALSE
+  ]
+
+
+  pair_idx <- combn(
+    seq_along(
+      selected_residues
+    ),
+    2
+  )
+
+
+  results <- vector(
+    "list",
+    ncol(
+      pair_idx
+    )
+  )
+
+
+  for (
+    k in seq_len(
+      ncol(
+        pair_idx
+      )
+    )
+  ) {
+
+
+    i <- pair_idx[
+      1,
+      k
+    ]
+
+
+    j <- pair_idx[
+      2,
+      k
+    ]
+
+
+    residue_1 <-
+      selected_residues[i]
+
+
+    residue_2 <-
+      selected_residues[j]
+
+
+    x <- X_top[
+      ,
+      i
+    ]
+
+
+    y <- X_top[
+      ,
+      j
+    ]
+
+
+    complete <- is.finite(x) &
+      is.finite(y)
+
+
+    x_complete <- x[
+      complete
+    ]
+
+
+    y_complete <- y[
+      complete
+    ]
+
+
+    n_pair <- length(
+      x_complete
+    )
+
+
+    valid_test <-
+      n_pair >= 3 &&
+      length(
+        unique(
+          x_complete
+        )
+      ) >= 2 &&
+      length(
+        unique(
+          y_complete
+        )
+      ) >= 2
+
+
+    if (!valid_test) {
+
+      rho <- NA_real_
+
+      p <- NA_real_
+
+    } else {
+
+      test <- tryCatch(
+
+        suppressWarnings(
+
+          cor.test(
+            x_complete,
+            y_complete,
+            method = "spearman",
+            exact = FALSE
+          )
+
+        ),
+
+        error = function(e) {
+
+          NULL
+        }
+      )
+
+
+      if (is.null(test)) {
+
+        rho <- NA_real_
+
+        p <- NA_real_
+
+      } else {
+
+        rho <- unname(
+          test$estimate
+        )
+
+
+        p <- test$p.value
+      }
+    }
+
+
+    results[[k]] <- data.frame(
+
+      site =
+        site_name,
+
+      residue_1 =
+        residue_1,
+
+      residue_2 =
+        residue_2,
+
+      n =
+        n_pair,
+
+      spearman_rho =
+        rho,
+
+      spearman_abs =
+        abs(rho),
+
+      spearman_p =
+        p,
+
+      stringsAsFactors =
+        FALSE
+    )
+  }
+
+
+  edges <- do.call(
+    rbind,
+    results
+  )
+
+
+  edges$spearman_FDR <-
+    NA_real_
+
+
+  valid_p <- is.finite(
+    edges$spearman_p
+  )
+
+
+  if (any(valid_p)) {
+
+    edges$spearman_FDR[
+      valid_p
+    ] <- p.adjust(
+
+      edges$spearman_p[
+        valid_p
+      ],
+
+      method =
+        "BH"
+    )
+  }
+
+
+  nodes <- calculate_nodes(
+
+    site_name =
+      site_name,
+
+    selected_residues =
+      selected_residues,
+
+    frequency_table =
+      top_frequency
+  )
+
+
+  list(
+
+    raw_matrix =
+      X_raw,
+
+    hellinger_matrix =
+      X_hellinger,
+
+    frequency_all =
+      frequency_result$all,
+
+    frequency_top =
+      top_frequency,
+
+    nodes =
+      nodes,
+
+    edges =
+      edges
+  )
+}
+
+
+# ==============================================================================
+# 15. RUN ANALYSIS
+# ==============================================================================
+
+analysis_results <- vector(
+  "list",
+  length(
+    sites_available
+  )
+)
+
+
+names(
+  analysis_results
+) <- sites_available
+
+
+for (
+  site_name in sites_available
+) {
+
+  cat(
+    "\nAnalyzing ",
+    site_name,
+    "...\n",
+    sep = ""
+  )
+
+
+  analysis_results[[site_name]] <-
+    calculate_site_analysis(
+      site_name
+    )
+}
+
+
+# ==============================================================================
+# 16. COLOUR SCALES
+# ==============================================================================
+
+# SPEARMAN
+#
+# -1 = red
+#  0 = white
+# +1 = blue
+
+correlation_col_fun <- circlize::colorRamp2(
+
+  c(
+    -1,
+    0,
+    1
+  ),
+
+  c(
+    "#B2182B",
+    "#FFFFFF",
+    "#2166AC"
+  )
+)
+
+
+# PCA LOADING
+#
+# -1 = orange
+#  0 = white
+# +1 = green
+
+loading_col_fun <- circlize::colorRamp2(
+
+  c(
+    -1,
+    0,
+    1
+  ),
+
+  c(
+    "#D37C49",
+    "#FFFFFF",
+    "#2E8B57"
+  )
+)
+
+
+# ==============================================================================
+# 17. PREPARE PLOT
+# ==============================================================================
+
+prepare_site_plot <- function(
+    site_name
+) {
+
+
+  edges_site <-
+    analysis_results[[site_name]]$edges
+
+
+  nodes_site <-
+    analysis_results[[site_name]]$nodes
+
+
+  edges_plot <- edges_site[
+
+    is.finite(
+      edges_site$spearman_rho
+    ) &
+
+      is.finite(
+        edges_site$spearman_FDR
+      ) &
+
+      edges_site$spearman_FDR <=
+        maximum_FDR &
+
+      edges_site$spearman_abs >=
+        min_abs_correlation,
+
+    ,
+
+    drop = FALSE
+  ]
+
+
+  nodes_plot <- nodes_site[
+
+    order(
+      -nodes_site$PC1_loading,
+      nodes_site$residue
+    ),
+
+    ,
+
+    drop = FALSE
+  ]
+
+
+  residue_order <-
+    nodes_plot$residue
+
+
+  if (nrow(edges_plot) > 0) {
+
+    edges_plot$link_colour <-
+      correlation_col_fun(
+        edges_plot$spearman_rho
+      )
+
+  } else {
+
+    edges_plot$link_colour <-
+      character(0)
+  }
+
+
+  list(
+
+    edges =
+      edges_plot,
+
+    all_edges =
+      edges_site,
+
+    nodes =
+      nodes_plot,
+
+    order =
+      residue_order,
+
+    gap_after =
+      rep(
+        sector_gap_degree,
+        length(
+          residue_order
+        )
+      )
+  )
+}
+
+
+# ==============================================================================
+# 18. RIBBON ALLOCATION
+# ==============================================================================
+
+allocate_ribbon_intervals <- function(
+    edges,
+    residue_order
+) {
+
+
+  if (nrow(edges) == 0) {
+
+    return(
+      list(
+        edges = edges,
+        maximum_total = 1
+      )
+    )
+  }
+
+
+  totals <- setNames(
+
+    rep(
+      0,
+      length(
+        residue_order
+      )
+    ),
+
+    residue_order
+  )
+
+
+  for (
+    k in seq_len(
+      nrow(
+        edges
+      )
+    )
+  ) {
+
+    r1 <- edges$residue_1[k]
+
+    r2 <- edges$residue_2[k]
+
+    w <- edges$spearman_abs[k]
+
+
+    totals[r1] <-
+      totals[r1] + w
+
+
+    totals[r2] <-
+      totals[r2] + w
+  }
+
+
+  maximum_total <- max(
+    totals,
+    na.rm = TRUE
+  )
+
+
+  if (
+    !is.finite(maximum_total) ||
+    maximum_total <= 0
+  ) {
+
+    maximum_total <- 1
+  }
+
+
+  cursors <- setNames(
+
+    rep(
+      0,
+      length(
+        residue_order
+      )
+    ),
+
+    residue_order
+  )
+
+
+  allocation_order <- order(
+    edges$spearman_abs,
+    decreasing = TRUE
+  )
+
+
+  E <- edges[
+    allocation_order,
+    ,
+    drop = FALSE
+  ]
+
+
+  E$start_1 <- NA_real_
+
+  E$end_1 <- NA_real_
+
+  E$start_2 <- NA_real_
+
+  E$end_2 <- NA_real_
+
+
+  for (
+    k in seq_len(
+      nrow(E)
+    )
+  ) {
+
+
+    r1 <- E$residue_1[k]
+
+    r2 <- E$residue_2[k]
+
+    w <- E$spearman_abs[k]
+
+
+    E$start_1[k] <-
+      cursors[r1]
+
+
+    E$end_1[k] <-
+      cursors[r1] + w
+
+
+    E$start_2[k] <-
+      cursors[r2]
+
+
+    E$end_2[k] <-
+      cursors[r2] + w
+
+
+    cursors[r1] <-
+      cursors[r1] + w
+
+
+    cursors[r2] <-
+      cursors[r2] + w
+  }
+
+
+  list(
+
+    edges =
+      E,
+
+    maximum_total =
+      maximum_total
+  )
+}
+
+
+# ==============================================================================
+# 19. RIGHT-SIDE VERTICAL GRADIENT
+# ==============================================================================
+
+draw_vertical_gradient_right <- function(
+    x_center,
+    y_bottom,
+    y_top,
+    bar_width,
+    colour_function,
+    title_text
+) {
+
+
+  x_left <-
+    x_center -
+    bar_width / 2
+
+
+  x_right <-
+    x_center +
+    bar_width / 2
+
+
+  gradient_values <- seq(
+    -1,
+    1,
+    length.out = 400
+  )
+
+
+  y_breaks <- seq(
+    y_bottom,
+    y_top,
+    length.out =
+      length(
+        gradient_values
+      ) + 1
+  )
+
+
+  # ---------------------------------------------------------------------------
+  # GRADIENT BAR
+  #
+  # bottom = -1
+  # center = 0
+  # top    = +1
+  # ---------------------------------------------------------------------------
+
+  for (
+    i in seq_along(
+      gradient_values
+    )
+  ) {
+
+
+    rect(
+
+      xleft =
+        x_left,
+
+      ybottom =
+        y_breaks[i],
+
+      xright =
+        x_right,
+
+      ytop =
+        y_breaks[i + 1],
+
+      col =
+        colour_function(
+          gradient_values[i]
+        ),
+
+      border =
+        NA,
+
+      xpd =
+        NA
+    )
+  }
+
+
+  # ---------------------------------------------------------------------------
+  # TITLE
+  #
+  # Rotated to follow the vertical gradient
+  # ---------------------------------------------------------------------------
+
+  text(
+
+    x =
+      x_left -
+      0.055,
+
+    y =
+      (
+        y_bottom +
+          y_top
+      ) / 2,
+
+    labels =
+      title_text,
+
+    srt =
+      90,
+
+    cex =
+      text_cex,
+
+    font =
+      1,
+
+    family =
+      font_family,
+
+    adj = c(
+      0.5,
+      0.5
+    ),
+
+    xpd =
+      NA
+  )
+
+
+  # ---------------------------------------------------------------------------
+  # SCALE LABELS
+  # ---------------------------------------------------------------------------
+
+  text(
+
+    x =
+      x_right +
+      0.035,
+
+    y = c(
+      y_top,
+      (
+        y_bottom +
+          y_top
+      ) / 2,
+      y_bottom
+    ),
+
+    labels = c(
+      "+1",
+      "0",
+      "-1"
+    ),
+
+    cex =
+      text_cex,
+
+    font =
+      1,
+
+    family =
+      font_family,
+
+    adj = c(
+      0,
+      0.5
+    ),
+
+    xpd =
+      NA
+  )
+}
+
+
+# ==============================================================================
+# 20. DRAW CHORD
+# ==============================================================================
+
+draw_main_chord <- function(
+    site_name
+) {
+
+
+  plot_data <- prepare_site_plot(
+    site_name
+  )
+
+
+  edges_plot <-
+    plot_data$edges
+
+
+  nodes_plot <-
+    plot_data$nodes
+
+
+  residue_order <-
+    plot_data$order
+
+
+  ribbon_data <- allocate_ribbon_intervals(
+    edges_plot,
+    residue_order
+  )
+
+
+  edges_allocated <-
+    ribbon_data$edges
+
+
+  maximum_total <-
+    ribbon_data$maximum_total
+
+
+  # ---------------------------------------------------------------------------
+  # PCA EXPLAINED VARIANCE
+  # ---------------------------------------------------------------------------
+
+  PC1_variance <- get_variance_percent(
+    variance_all,
+    site_name,
+    "PC1"
+  )
+
+
+  PC2_variance <- get_variance_percent(
+    variance_all,
+    site_name,
+    "PC2"
+  )
+
+
+  par(
+
+    mar = c(
+      0.1,
+      0.1,
+      1.2,
+      0.1
+    ),
+
+    xpd =
+      NA,
+
+    family =
+      font_family
+  )
+
+
+  circos.clear()
+
+
+  # ---------------------------------------------------------------------------
+  # More canvas space is provided on the RIGHT for the two vertical legends.
+  #
+  # The chord itself remains centered at x = 0.
+  # ---------------------------------------------------------------------------
+
+  circos.par(
+
+    start.degree =
+      90,
+
+    gap.after =
+      plot_data$gap_after,
+
+    track.margin = c(
+      0.002,
+      0.002
+    ),
+
+    cell.padding = c(
+      0,
+      0,
+      0,
+      0
+    ),
+
+    points.overflow.warning =
+      FALSE,
+
+    canvas.xlim = c(
+      -1.03,
+      1.72
+    ),
+
+    canvas.ylim = c(
+      -1.03,
+      1.03
+    )
+  )
+
+
+  circos.initialize(
+
+    factors =
+      factor(
+        residue_order,
+        levels = residue_order
+      ),
+
+    xlim =
+      cbind(
+
+        rep(
+          0,
+          length(
+            residue_order
+          )
+        ),
+
+        rep(
+          maximum_total,
+          length(
+            residue_order
+          )
+        )
+      )
+  )
+
+
+  # ===========================================================================
+  # TRACK 1 — RESIDUE LABELS
+  # ===========================================================================
+
+  circos.trackPlotRegion(
+
+    ylim = c(
+      0,
+      1
+    ),
+
+    track.height =
+      residue_track_height,
+
+    bg.border =
+      NA,
+
+    bg.col =
+      NA,
+
+    panel.fun = function(
+        x,
+        y
+    ) {
+
+
+      residue_name <-
+        CELL_META$sector.index
+
+
+      circos.text(
+
+        x =
+          CELL_META$xcenter,
+
+        y =
+          mean(
+            CELL_META$ylim
+          ),
+
+        labels =
+          residue_name,
+
+        facing =
+          "bending.outside",
+
+        niceFacing =
+          TRUE,
+
+        adj = c(
+          0.5,
+          0.5
+        ),
+
+        cex =
+          text_cex,
+
+        font =
+          1,
+
+        family =
+          font_family
+      )
+    }
+  )
+
+
+  # ===========================================================================
+  # TRACK 2 — OUTER RING = PC1
+  # ===========================================================================
+
+  circos.trackPlotRegion(
+
+    ylim = c(
+      0,
+      1
+    ),
+
+    track.height =
+      PC1_track_height,
+
+    bg.border =
+      NA,
+
+    bg.col =
+      NA,
+
+    panel.fun = function(
+        x,
+        y
+    ) {
+
+
+      residue_name <-
+        CELL_META$sector.index
+
+
+      idx <- match(
+        residue_name,
+        nodes_plot$residue
+      )
+
+
+      loading_value <-
+        nodes_plot$PC1_loading[
+          idx
+        ]
+
+
+      circos.rect(
+
+        CELL_META$xlim[1],
+
+        CELL_META$ylim[1],
+
+        CELL_META$xlim[2],
+
+        CELL_META$ylim[2],
+
+        col =
+          loading_col_fun(
+            loading_value
+          ),
+
+        border =
+          "white",
+
+        lwd =
+          0.7
+      )
+    }
+  )
+
+
+  # ===========================================================================
+  # TRACK 3 — INNER RING = PC2
+  # ===========================================================================
+
+  circos.trackPlotRegion(
+
+    ylim = c(
+      0,
+      1
+    ),
+
+    track.height =
+      PC2_track_height,
+
+    bg.border =
+      NA,
+
+    bg.col =
+      NA,
+
+    panel.fun = function(
+        x,
+        y
+    ) {
+
+
+      residue_name <-
+        CELL_META$sector.index
+
+
+      idx <- match(
+        residue_name,
+        nodes_plot$residue
+      )
+
+
+      loading_value <-
+        nodes_plot$PC2_loading[
+          idx
+        ]
+
+
+      circos.rect(
+
+        CELL_META$xlim[1],
+
+        CELL_META$ylim[1],
+
+        CELL_META$xlim[2],
+
+        CELL_META$ylim[2],
+
+        col =
+          loading_col_fun(
+            loading_value
+          ),
+
+        border =
+          "white",
+
+        lwd =
+          0.7
+      )
+    }
+  )
+
+
+  # ===========================================================================
+  # SPEARMAN RIBBONS
+  # ===========================================================================
+
+  if (nrow(edges_allocated) > 0) {
+
+
+    draw_order <- order(
+      edges_allocated$spearman_abs,
+      decreasing = FALSE
+    )
+
+
+    for (
+      k in draw_order
+    ) {
+
+
+      ribbon_colour <- grDevices::adjustcolor(
+
+        edges_allocated$link_colour[k],
+
+        alpha.f =
+          0.80
+      )
+
+
+      circos.link(
+
+        sector.index1 =
+          edges_allocated$residue_1[k],
+
+        point1 = c(
+          edges_allocated$start_1[k],
+          edges_allocated$end_1[k]
+        ),
+
+        sector.index2 =
+          edges_allocated$residue_2[k],
+
+        point2 = c(
+          edges_allocated$start_2[k],
+          edges_allocated$end_2[k]
+        ),
+
+        col =
+          ribbon_colour,
+
+        border =
+          NA
+      )
+    }
+  }
+
+
+  # ===========================================================================
+  # MAIN TITLE
+  #
+  # Placed at x = 0 so it remains centered above the chord,
+  # not above the enlarged right-side canvas.
+  # ===========================================================================
+
+  text(
+
+    x =
+      0,
+
+    y =
+      1.15,
+
+    labels =
+      site_titles[[site_name]],
+
+    cex =
+      1.28,
+
+    font =
+      2,
+
+    family =
+      font_family,
+
+    adj = c(
+      0.5,
+      0.5
+    ),
+
+    xpd =
+      NA
+  )
+
+
+  # ===========================================================================
+  # PC1 / PC2 EXPLAINED VARIANCE
+  #
+  # Bold
+  # PC1 directly above PC2
+  # ===========================================================================
+
+  text(
+
+    x =
+      PC_info_x,
+
+    y =
+      PC1_info_y,
+
+    labels =
+      paste0(
+        "PC1 (outer ring): ",
+        round(
+          PC1_variance,
+          1
+        ),
+        " %VE"
+      ),
+
+    cex =
+      text_cex,
+
+    font =
+      2,
+
+    family =
+      font_family,
+
+    adj = c(
+      0,
+      0.5
+    ),
+
+    xpd =
+      NA
+  )
+
+
+  text(
+
+    x =
+      PC_info_x,
+
+    y =
+      PC2_info_y,
+
+    labels =
+      paste0(
+        "PC2 (inner ring): ",
+        round(
+          PC2_variance,
+          1
+        ),
+        " %VE"
+      ),
+
+    cex =
+      text_cex,
+
+    font =
+      2,
+
+    family =
+      font_family,
+
+    adj = c(
+      0,
+      0.5
+    ),
+
+    xpd =
+      NA
+  )
+
+
+  # ===========================================================================
+  # RIGHT-SIDE LEGEND 1 — PRINCIPAL COMPONENT LOADING
+  # ===========================================================================
+
+  draw_vertical_gradient_right(
+
+    x_center =
+      loading_legend_center_x,
+
+    y_bottom =
+      legend_y_bottom,
+
+    y_top =
+      legend_y_top,
+
+    bar_width =
+      legend_bar_width,
+
+    colour_function =
+      loading_col_fun,
+
+    title_text =
+      "Principal component loading"
+  )
+
+
+  # ===========================================================================
+  # RIGHT-SIDE LEGEND 2 — SPEARMAN
+  # ===========================================================================
+
+  draw_vertical_gradient_right(
+
+    x_center =
+      correlation_legend_center_x,
+
+    y_bottom =
+      legend_y_bottom,
+
+    y_top =
+      legend_y_top,
+
+    bar_width =
+      legend_bar_width,
+
+    colour_function =
+      correlation_col_fun,
+
+    title_text =
+      "Spearman correlation (ρ)"
+  )
+
+
+  circos.clear()
+}
+
+
+# ==============================================================================
+# 21. COMPLETE FIGURE
+# ==============================================================================
+
+draw_site_figure <- function(
+    site_name
+) {
+
+  draw_main_chord(
+    site_name
+  )
+}
+
+
+# ==============================================================================
+# 22. OUTPUT DIRECTORY
+# ==============================================================================
+
+output_dir <- create_output_directory(
+  pca_file
+)
+
+
+# ==============================================================================
+# 23. EXPORT TABLES
+# ==============================================================================
+
+all_edges <- do.call(
+
+  rbind,
+
+  lapply(
+    analysis_results,
+    function(x) {
+
+      x$edges
+    }
+  )
+)
+
+
+all_nodes <- do.call(
+
+  rbind,
+
+  lapply(
+    analysis_results,
+    function(x) {
+
+      x$nodes
+    }
+  )
+)
+
+
+all_frequency <- do.call(
+
+  rbind,
+
+  lapply(
+    analysis_results,
+    function(x) {
+
+      x$frequency_all
+    }
+  )
+)
+
+
+top10_frequency <- do.call(
+
+  rbind,
+
+  lapply(
+    analysis_results,
+    function(x) {
+
+      x$frequency_top
+    }
+  )
+)
+
+
+excel_output <- safe_output_file(
+
+  output_dir,
+
+  "chord_diagram_calculated.xlsx"
+)
+
+
+wb <- createWorkbook()
+
+
+addWorksheet(
+  wb,
+  "Spearman_edges"
+)
+
+
+writeData(
+  wb,
+  "Spearman_edges",
+  all_edges
+)
+
+
+addWorksheet(
+  wb,
+  "PCA_nodes"
+)
+
+
+writeData(
+  wb,
+  "PCA_nodes",
+  all_nodes
+)
+
+
+addWorksheet(
+  wb,
+  "Residue_frequency"
+)
+
+
+writeData(
+  wb,
+  "Residue_frequency",
+  all_frequency
+)
+
+
+addWorksheet(
+  wb,
+  "Top10_frequency"
+)
+
+
+writeData(
+  wb,
+  "Top10_frequency",
+  top10_frequency
+)
+
+
+saveWorkbook(
+  wb,
+  excel_output,
+  overwrite = TRUE
+)
+
+
+# ==============================================================================
+# 24. EXPORT FIGURES
+# ==============================================================================
+
+for (
+  site_name in sites_available
+) {
+
+
+  cat(
+    "\nGenerating ",
+    site_name,
+    "...\n",
+    sep = ""
+  )
+
+
+  plot_data <- prepare_site_plot(
+    site_name
+  )
+
+
+  # ---------------------------------------------------------------------------
+  # SIGNIFICANT SPEARMAN EDGES
+  # ---------------------------------------------------------------------------
+
+  write.csv(
+
+    plot_data$edges,
+
+    safe_output_file(
+      output_dir,
+      paste0(
+        "ChordDiagram_",
+        site_name,
+        "_significant_Spearman_edges.csv"
+      )
+    ),
+
+    row.names =
+      FALSE
+  )
+
+
+  # ---------------------------------------------------------------------------
+  # TOP 10 RESIDUES
+  # ---------------------------------------------------------------------------
+
+  write.csv(
+
+    plot_data$nodes,
+
+    safe_output_file(
+      output_dir,
+      paste0(
+        "ChordDiagram_",
+        site_name,
+        "_Top10_residues.csv"
+      )
+    ),
+
+    row.names =
+      FALSE
+  )
+
+
+  # ---------------------------------------------------------------------------
+  # PNG
+  # ---------------------------------------------------------------------------
+
+  png_file <- safe_output_file(
+
+    output_dir,
+
+    paste0(
+      "ChordDiagram_",
+      site_name,
+      "_spearman_vertical_legends.png"
+    )
+  )
+
+
+  png(
+
+    filename =
+      png_file,
+
+    width =
+      png_width,
+
+    height =
+      png_height,
+
+    res =
+      png_res,
+
+    units =
+      "px",
+
+    bg =
+      output_background
+  )
+
+
+  draw_site_figure(
+    site_name
+  )
+
+
+  dev.off()
+
+
+  # ---------------------------------------------------------------------------
+  # TIFF
+  # ---------------------------------------------------------------------------
+
+  tiff_file <- safe_output_file(
+
+    output_dir,
+
+    paste0(
+      "ChordDiagram_",
+      site_name,
+      "_spearman_vertical_legends.tiff"
+    )
+  )
+
+
+  tiff(
+
+    filename =
+      tiff_file,
+
+    width =
+      tiff_width,
+
+    height =
+      tiff_height,
+
+    res =
+      tiff_res,
+
+    units =
+      "px",
+
+    compression =
+      "lzw",
+
+    bg =
+      output_background
+  )
+
+
+  draw_site_figure(
+    site_name
+  )
+
+
+  dev.off()
+
+
+  # ---------------------------------------------------------------------------
+  # PDF
+  # ---------------------------------------------------------------------------
+
+  pdf_file <- safe_output_file(
+
+    output_dir,
+
+    paste0(
+      "ChordDiagram_",
+      site_name,
+      "_spearman_vertical_legends.pdf"
+    )
+  )
+
+
+  pdf(
+
+    file =
+      pdf_file,
+
+    width =
+      11,
+
+    height =
+      8.75,
+
+    family =
+      "Helvetica",
+
+    useDingbats =
+      FALSE
+  )
+
+
+  draw_site_figure(
+    site_name
+  )
+
+
+  dev.off()
+}
+
+
+# ==============================================================================
+# 25. COMBINED PDF
+# ==============================================================================
+
+combined_pdf <- safe_output_file(
+
+  output_dir,
+
+  "ChordDiagram_ALL_SITES_spearman_vertical_legends.pdf"
+)
+
+
+pdf(
+
+  file =
+    combined_pdf,
+
+  width =
+    11,
+
+  height =
+    8.75,
+
+  family =
+    "Helvetica",
+
+  useDingbats =
+    FALSE
+)
+
+
+for (
+  site_name in sites_available
+) {
+
+  draw_site_figure(
+    site_name
+  )
+}
+
+
+dev.off()
+
+
+# ==============================================================================
+# 26. DISPLAY FIRST SITE
+# ==============================================================================
+
+draw_site_figure(
+  sites_available[1]
+)
+
+
+# ==============================================================================
+# 27. SUMMARY
+# ==============================================================================
+
+cat(
+  "\n============================================================\n",
+  "CHORD DIAGRAM ANALYSIS COMPLETED\n",
+  "============================================================\n\n",
+  sep = ""
+)
+
+
+cat(
+  "Residue source: Top residues column\n"
+)
+
+
+cat(
+  "Chains preserved: YES\n"
+)
+
+
+cat(
+  "Top residues selected by pose frequency: ",
+  top_n_residues,
+  "\n",
+  sep = ""
+)
+
+
+cat(
+  "Spearman input: Hellinger-transformed residue fingerprint\n"
+)
+
+
+cat(
+  "Self-correlations: EXCLUDED\n"
+)
+
+
+cat(
+  "Duplicate A-B / B-A pairs: EXCLUDED\n"
+)
+
+
+cat(
+  "Maximum comparisons per site: 45\n"
+)
+
+
+cat(
+  "Multiple comparison correction: Benjamini-Hochberg FDR\n"
+)
+
+
+cat(
+  "FDR threshold: ",
+  maximum_FDR,
+  "\n\n",
+  sep = ""
+)
+
+
+for (
+  site_name in sites_available
+) {
+
+
+  pd <- prepare_site_plot(
+    site_name
+  )
+
+
+  cat(
+    site_name,
+    ": ",
+    nrow(
+      pd$nodes
+    ),
+    " residues | ",
+    nrow(
+      pd$edges
+    ),
+    " significant Spearman correlations\n",
+    sep = ""
+  )
+}
+
+
+cat(
+  "\nResidue order: highest PC1 loading -> lowest PC1 loading\n"
+)
+
+
+cat(
+  "Loading scale: -1 orange | 0 white | +1 green\n"
+)
+
+
+cat(
+  "Spearman scale: -1 red | 0 white | +1 blue\n"
+)
+
+
+cat(
+  "Gradient legends: vertical, right side, centered with chord\n"
+)
+
+
+cat(
+  "Gradient height: 4/5 of estimated inner-ring diameter\n"
+)
+
+
+cat(
+  "Gradient width: 2/5 of previous vertical legend width\n"
+)
+
+
+cat(
+  "PC1 and PC2 information: bold\n"
+)
+
+
+cat(
+  "\nOutput folder:\n",
+  output_dir,
+  "\n",
+  sep = ""
+)
