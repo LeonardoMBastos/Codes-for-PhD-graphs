@@ -11,55 +11,41 @@
 #
 # ==============================================================================
 
+# ==============================================================================
+# CHORD DIAGRAM
+# TOP 10 MOST FREQUENT RESIDUES
+# SPEARMAN CORRELATIONS + PCA LOADING RINGS
+# ==============================================================================
 
-# ==============================================================================
-# 0. SETTINGS
-# ==============================================================================
+# 0. SETTINGS -----------------------------------------------------------------
 
 maximum_FDR <- 0.05
-
 top_n_residues <- 10
-
 min_abs_correlation <- 0.00
 
 font_family <- "sans"
-
 output_background <- "white"
-
 sector_gap_degree <- 1.2
 
-
-# ------------------------------------------------------------------------------
-# SHARED TEXT SIZE
-# ------------------------------------------------------------------------------
-
+# Same text size for residues, legends and PC information
 text_cex <- 0.98
 
-
-# ------------------------------------------------------------------------------
-# LEGEND WIDTH
-#
-# Previous width = 0.40
-# New width = 4/5 × 0.40 = 0.32
-# ------------------------------------------------------------------------------
-
+# Gradient bars = 4/5 of previous width (0.40 -> 0.32), centered
 legend_gradient_width <- 0.32
 
-legend_x_left  <- 0.5 - legend_gradient_width / 2
+legend_x_left <- 0.5 - legend_gradient_width / 2
 legend_x_right <- 0.5 + legend_gradient_width / 2
 
 
-# ------------------------------------------------------------------------------
-# EXPORT
-# ------------------------------------------------------------------------------
+# Export
 
-png_width  <- 4400
+png_width <- 4400
 png_height <- 3500
-png_res    <- 400
+png_res <- 400
 
-tiff_width  <- 6600
+tiff_width <- 6600
 tiff_height <- 5250
-tiff_res    <- 600
+tiff_res <- 600
 
 
 # ==============================================================================
@@ -516,6 +502,7 @@ parse_top_residues <- function(x) {
     is.na(x) ||
     trimws(x) == ""
   ) {
+
     return(result)
   }
 
@@ -749,7 +736,6 @@ build_raw_fingerprint <- function(
 
 hellinger_transform <- function(X) {
 
-
   row_totals <- rowSums(
     X,
     na.rm = TRUE
@@ -952,12 +938,10 @@ calculate_nodes <- function(
       pc2,
 
     PC1_contribution_percent =
-      (pc1^2 / den1) *
-      100,
+      (pc1^2 / den1) * 100,
 
     PC2_contribution_percent =
-      (pc2^2 / den2) *
-      100,
+      (pc2^2 / den2) * 100,
 
     stringsAsFactors =
       FALSE
@@ -1304,6 +1288,11 @@ for (
 # 16. COLOUR SCALES
 # ==============================================================================
 
+# Spearman
+# -1 = red
+#  0 = white
+# +1 = blue
+
 correlation_col_fun <- circlize::colorRamp2(
 
   c(
@@ -1319,6 +1308,11 @@ correlation_col_fun <- circlize::colorRamp2(
   )
 )
 
+
+# PCA loading
+# -1 = orange
+#  0 = white
+# +1 = green
 
 loading_col_fun <- circlize::colorRamp2(
 
@@ -1374,6 +1368,8 @@ prepare_site_plot <- function(
     drop = FALSE
   ]
 
+
+  # Highest PC1 loading -> lowest PC1 loading
 
   nodes_plot <- nodes_site[
 
@@ -1531,9 +1527,10 @@ allocate_ribbon_intervals <- function(
 
 
   E$start_1 <- NA_real_
-  E$end_1   <- NA_real_
+  E$end_1 <- NA_real_
+
   E$start_2 <- NA_real_
-  E$end_2   <- NA_real_
+  E$end_2 <- NA_real_
 
 
   for (
@@ -1576,6 +1573,7 @@ allocate_ribbon_intervals <- function(
 
 
   list(
+
     edges =
       E,
 
@@ -1978,7 +1976,7 @@ draw_main_chord <- function(
           NA
       )
     }
-  )
+  }
 
 
   # ===========================================================================
@@ -2138,6 +2136,10 @@ draw_gradient_bar <- function(
   }
 
 
+  # ===========================================================================
+  # LEGEND TITLE
+  # ===========================================================================
+
   text(
 
     x =
@@ -2163,6 +2165,10 @@ draw_gradient_bar <- function(
       font_family
   )
 
+
+  # ===========================================================================
+  # SCALE VALUES
+  # ===========================================================================
 
   text(
 
@@ -2496,6 +2502,10 @@ for (
   )
 
 
+  # ---------------------------------------------------------------------------
+  # SIGNIFICANT SPEARMAN EDGES
+  # ---------------------------------------------------------------------------
+
   write.csv(
 
     plot_data$edges,
@@ -2513,6 +2523,10 @@ for (
       FALSE
   )
 
+
+  # ---------------------------------------------------------------------------
+  # TOP 10 RESIDUES
+  # ---------------------------------------------------------------------------
 
   write.csv(
 
@@ -2830,6 +2844,14 @@ cat(
 
 cat(
   "PC information: PC1 directly above PC2\n"
+)
+
+
+cat(
+  "Legend gradient width: ",
+  legend_gradient_width,
+  "\n",
+  sep = ""
 )
 
 
