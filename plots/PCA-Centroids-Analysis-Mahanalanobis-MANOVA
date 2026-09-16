@@ -1,0 +1,2340 @@
+# ==============================================================================
+# MANOVA + MAHALANOBIS DISTANCE IN PC1 × PC2 SPACE
+# ==============================================================================
+#
+# PURPOSE
+#
+# Quantify the multivariate separation between compound centroids shown
+# in the PCA figure.
+#
+# IMPORTANT:
+#
+# Only PC1 and PC2 are used because the target distances correspond to
+# the centroid positions displayed in the two-dimensional PCA plots.
+#
+# Analyses are performed independently for each binding site:
+#
+#   BZD
+#   BB
+#   GABA
+#
+#
+# ANALYSES
+#
+# 1. Omnibus MANOVA:
+#
+#       cbind(PC1, PC2) ~ compound
+#
+#    Pillai's trace is used as the primary statistic.
+#
+#
+# 2. Pairwise MANOVA:
+#
+#    Every unique pair of compounds within each binding site.
+#
+#    P values are corrected using Benjamini-Hochberg FDR.
+#
+#
+# 3. Mahalanobis distance:
+#
+#    Calculated between compound centroids in the PC1 × PC2 plane.
+#
+#    D² = (μ1 - μ2)' S_pooled^-1 (μ1 - μ2)
+#
+#    D = sqrt(D²)
+#
+#
+# 4. Box's M:
+#
+#    Diagnostic test for equality of covariance matrices.
+#
+#
+# 5. Outputs:
+#
+#    - Excel workbook
+#    - Mahalanobis distance matrices
+#    - Mahalanobis heatmaps
+#    - Group centroids
+#    - Omnibus MANOVA
+#    - Pairwise MANOVA + BH-FDR
+#
+# ==============================================================================
+
+
+
+# ==============================================================================
+# 0. SETTINGS
+# ==============================================================================
+
+selected_PCs <- c(
+  "PC1",
+  "PC2"
+)
+
+
+FDR_METHOD <- "BH"
+
+FDR_THRESHOLD <- 0.05
+
+
+SINGULARITY_TOLERANCE <- 1e-10
+
+
+heatmap_dpi <- 400
+
+
+
+# ==============================================================================
+# 1. PACKAGES
+# ==============================================================================
+
+required_packages <- c(
+  "openxlsx",
+  "MASS",
+  "ggplot2"
+)
+
+
+missing_packages <- required_packages[
+  !vapply(
+    required_packages,
+    requireNamespace,
+    logical(1),
+    quietly = TRUE
+  )
+]
+
+
+if (length(missing_packages) > 0) {
+
+  install.packages(
+    missing_packages
+  )
+}
+
+
+library(openxlsx)
+library(MASS)
+library(ggplot2)
+
+
+
+# ==============================================================================
+# 2. OPTIONAL PACKAGE — BOX'S M
+# ==============================================================================
+
+has_biotools <- requireNamespace(
+  "biotools",
+  quietly = TRUE
+)
+
+
+if (!has_biotools) {
+
+  message(
+    paste0(
+      "\nPackage 'biotools' is not installed.\n",
+      "Box's M will be skipped.\n",
+      "To include it later, run:\n",
+      "install.packages('biotools')\n"
+    )
+  )
+}
+
+
+
+# ==============================================================================
+# 3. SELECT INPUT FILE
+# ==============================================================================
+
+cat(
+  "\n============================================================\n",
+  "SELECT PCA_complete_results.xlsx\n",
+  "============================================================\n\n",
+  sep = ""
+)
+
+
+input_file <- file.choose()
+
+
+
+# ==============================================================================
+# 4. OUTPUT DIRECTORY
+# ==============================================================================
+
+output_dir <- file.path(
+  dirname(input_file),
+  "MANOVA_Mahalanobis_PC1_PC2"
+)
+
+
+dir.create(
+  output_dir,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+
+
+# ==============================================================================
+# 5. CHECK WORKBOOK
+# ==============================================================================
+
+sheet_names <- openxlsx::getSheetNames(
+  input_file
+)
+
+
+required_sheets <- c(
+  "Scores_all_PCs",
+  "Variance_all_PCs"
+)
+
+
+missing_sheets <- setdiff(
+  required_sheets,
+  sheet_names
+)
+
+
+if (length(missing_sheets) > 0) {
+
+  stop(
+    paste0(
+      "Missing worksheet(s): ",
+      paste(
+        missing_sheets,
+        collapse = ", "
+      )
+    ),
+    call. = FALSE
+  )
+}
+
+
+
+# ==============================================================================
+# 6. READ DATA
+# ==============================================================================
+
+scores <- openxlsx::read.xlsx(
+  input_file,
+  sheet = "Scores_all_PCs",
+  check.names = FALSE
+)
+
+
+variance_table <- openxlsx::read.xlsx(
+  input_file,
+  sheet = "Variance_all_PCs",
+  check.names = FALSE
+)
+
+
+
+# ==============================================================================
+# 7. CHECK REQUIRED COLUMNS
+# ==============================================================================
+
+required_score_columns <- c(
+  "site",
+  "compound",
+  "PC1",
+  "PC2"
+)
+
+
+missing_score_columns <- setdiff(
+  required_score_columns,
+  names(scores)
+)
+
+
+if (length(missing_score_columns) > 0) {
+
+  stop(
+    paste0(
+      "Missing column(s) in Scores_all_PCs: ",
+      paste(
+        missing_score_columns,
+        collapse = ", "
+      )
+    ),
+    call. = FALSE
+  )
+}
+
+
+
+# ==============================================================================
+# 8. CLEAN DATA
+# ==============================================================================
+
+scores$site <- trimws(
+  as.character(
+    scores$site
+  )
+)
+
+
+scores$compound <- trimws(
+  as.character(
+    scores$compound
+  )
+)
+
+
+scores$PC1 <- suppressWarnings(
+  as.numeric(
+    scores$PC1
+  )
+)
+
+
+scores$PC2 <- suppressWarnings(
+  as.numeric(
+    scores$PC2
+  )
+)
+
+
+variance_table$site <- trimws(
+  as.character(
+    variance_table$site
+  )
+)
+
+
+variance_table$PC <- trimws(
+  as.character(
+    variance_table$PC
+  )
+)
+
+
+variance_table$variance_percent <- suppressWarnings(
+  as.numeric(
+    variance_table$variance_percent
+  )
+)
+
+
+
+# ==============================================================================
+# 9. REMOVE INVALID ROWS
+# ==============================================================================
+
+scores <- scores[
+  !is.na(scores$site) &
+    scores$site != "" &
+    !is.na(scores$compound) &
+    scores$compound != "" &
+    is.finite(scores$PC1) &
+    is.finite(scores$PC2),
+  ,
+  drop = FALSE
+]
+
+
+if (nrow(scores) == 0) {
+
+  stop(
+    "No valid observations remained after data cleaning.",
+    call. = FALSE
+  )
+}
+
+
+
+# ==============================================================================
+# 10. SITE ORDER
+# ==============================================================================
+
+preferred_site_order <- c(
+  "BZD",
+  "BB",
+  "GABA"
+)
+
+
+sites_present <- unique(
+  scores$site
+)
+
+
+sites <- c(
+
+  preferred_site_order[
+    preferred_site_order %in%
+      sites_present
+  ],
+
+  setdiff(
+    sites_present,
+    preferred_site_order
+  )
+)
+
+
+
+# ==============================================================================
+# 11. EXPLAINED VARIANCE OF PC1 AND PC2
+# ==============================================================================
+
+get_variance <- function(
+    site_name,
+    PC_name
+) {
+
+
+  idx <- which(
+    variance_table$site == site_name &
+      variance_table$PC == PC_name
+  )
+
+
+  if (length(idx) == 0) {
+
+    return(
+      NA_real_
+    )
+  }
+
+
+  variance_table$variance_percent[
+    idx[1]
+  ]
+}
+
+
+
+variance_summary_list <- list()
+
+
+for (site_name in sites) {
+
+
+  PC1_variance <- get_variance(
+    site_name,
+    "PC1"
+  )
+
+
+  PC2_variance <- get_variance(
+    site_name,
+    "PC2"
+  )
+
+
+  variance_summary_list[[site_name]] <- data.frame(
+
+    site =
+      site_name,
+
+    PC1_variance_percent =
+      PC1_variance,
+
+    PC2_variance_percent =
+      PC2_variance,
+
+    PC1_PC2_total_percent =
+      PC1_variance +
+      PC2_variance,
+
+    stringsAsFactors =
+      FALSE
+  )
+}
+
+
+variance_summary <- do.call(
+  rbind,
+  variance_summary_list
+)
+
+
+rownames(
+  variance_summary
+) <- NULL
+
+
+
+# ==============================================================================
+# 12. SAMPLE SIZES
+# ==============================================================================
+
+sample_sizes <- as.data.frame(
+  table(
+    site =
+      scores$site,
+
+    compound =
+      scores$compound
+  )
+)
+
+
+sample_sizes <- sample_sizes[
+  sample_sizes$Freq > 0,
+  ,
+  drop = FALSE
+]
+
+
+names(sample_sizes)[
+  names(sample_sizes) == "Freq"
+] <- "n"
+
+
+
+# ==============================================================================
+# 13. OMNIBUS MANOVA
+# ==============================================================================
+
+MANOVA_omnibus_list <- list()
+
+
+for (site_name in sites) {
+
+
+  cat(
+    "\n============================================================\n",
+    "OMNIBUS MANOVA — ",
+    site_name,
+    "\n",
+    "PC1 + PC2\n",
+    "============================================================\n",
+    sep = ""
+  )
+
+
+  site_data <- scores[
+    scores$site == site_name,
+    c(
+      "compound",
+      "PC1",
+      "PC2"
+    ),
+    drop = FALSE
+  ]
+
+
+  site_data$compound <- droplevels(
+    factor(
+      site_data$compound
+    )
+  )
+
+
+  if (nlevels(site_data$compound) < 2) {
+
+    warning(
+      paste0(
+        "Fewer than two compounds for ",
+        site_name
+      )
+    )
+
+    next
+  }
+
+
+  MANOVA_fit <- tryCatch(
+
+    manova(
+      cbind(
+        PC1,
+        PC2
+      ) ~ compound,
+      data = site_data
+    ),
+
+    error = function(e) {
+
+      NULL
+    }
+  )
+
+
+  if (is.null(MANOVA_fit)) {
+
+    warning(
+      paste0(
+        "MANOVA failed for ",
+        site_name
+      )
+    )
+
+    next
+  }
+
+
+  MANOVA_summary <- summary(
+    MANOVA_fit,
+    test = "Pillai"
+  )
+
+
+  MANOVA_stats <- MANOVA_summary$stats
+
+
+  effect_row <- which(
+    rownames(MANOVA_stats) ==
+      "compound"
+  )
+
+
+  if (length(effect_row) == 0) {
+
+    effect_row <- 1
+  }
+
+
+  PC1_variance <- get_variance(
+    site_name,
+    "PC1"
+  )
+
+
+  PC2_variance <- get_variance(
+    site_name,
+    "PC2"
+  )
+
+
+  MANOVA_omnibus_list[[site_name]] <- data.frame(
+
+    site =
+      site_name,
+
+    n =
+      nrow(site_data),
+
+    number_of_compounds =
+      nlevels(
+        site_data$compound
+      ),
+
+    variables =
+      "PC1 + PC2",
+
+    PC1_variance_percent =
+      PC1_variance,
+
+    PC2_variance_percent =
+      PC2_variance,
+
+    PC1_PC2_total_percent =
+      PC1_variance +
+      PC2_variance,
+
+    Pillai_trace =
+      as.numeric(
+        MANOVA_stats[
+          effect_row,
+          "Pillai"
+        ]
+      ),
+
+    approximate_F =
+      as.numeric(
+        MANOVA_stats[
+          effect_row,
+          "approx F"
+        ]
+      ),
+
+    numerator_df =
+      as.numeric(
+        MANOVA_stats[
+          effect_row,
+          "num Df"
+        ]
+      ),
+
+    denominator_df =
+      as.numeric(
+        MANOVA_stats[
+          effect_row,
+          "den Df"
+        ]
+      ),
+
+    p_value =
+      as.numeric(
+        MANOVA_stats[
+          effect_row,
+          "Pr(>F)"
+        ]
+      ),
+
+    stringsAsFactors =
+      FALSE
+  )
+}
+
+
+
+if (length(MANOVA_omnibus_list) > 0) {
+
+
+  MANOVA_omnibus <- do.call(
+    rbind,
+    MANOVA_omnibus_list
+  )
+
+
+  rownames(
+    MANOVA_omnibus
+  ) <- NULL
+
+
+} else {
+
+
+  MANOVA_omnibus <- data.frame()
+}
+
+
+
+# ==============================================================================
+# 14. PAIRWISE MANOVA
+# ==============================================================================
+
+pairwise_MANOVA_list <- list()
+
+pairwise_counter <- 1
+
+
+for (site_name in sites) {
+
+
+  site_data <- scores[
+    scores$site == site_name,
+    c(
+      "compound",
+      "PC1",
+      "PC2"
+    ),
+    drop = FALSE
+  ]
+
+
+  site_data$compound <- droplevels(
+    factor(
+      site_data$compound
+    )
+  )
+
+
+  compounds <- levels(
+    site_data$compound
+  )
+
+
+  if (length(compounds) < 2) {
+
+    next
+  }
+
+
+  compound_pairs <- combn(
+    compounds,
+    2,
+    simplify = FALSE
+  )
+
+
+  for (pair in compound_pairs) {
+
+
+    pair_data <- site_data[
+      site_data$compound %in% pair,
+      ,
+      drop = FALSE
+    ]
+
+
+    pair_data$compound <- droplevels(
+      factor(
+        pair_data$compound
+      )
+    )
+
+
+    pair_fit <- tryCatch(
+
+      manova(
+        cbind(
+          PC1,
+          PC2
+        ) ~ compound,
+        data = pair_data
+      ),
+
+      error = function(e) {
+
+        NULL
+      }
+    )
+
+
+    if (is.null(pair_fit)) {
+
+      next
+    }
+
+
+    pair_summary <- tryCatch(
+
+      summary(
+        pair_fit,
+        test = "Pillai"
+      ),
+
+      error = function(e) {
+
+        NULL
+      }
+    )
+
+
+    if (is.null(pair_summary)) {
+
+      next
+    }
+
+
+    pair_stats <- pair_summary$stats
+
+
+    effect_row <- which(
+      rownames(pair_stats) ==
+        "compound"
+    )
+
+
+    if (length(effect_row) == 0) {
+
+      effect_row <- 1
+    }
+
+
+    pairwise_MANOVA_list[[pairwise_counter]] <- data.frame(
+
+      site =
+        site_name,
+
+      compound_1 =
+        pair[1],
+
+      compound_2 =
+        pair[2],
+
+      n_1 =
+        sum(
+          pair_data$compound ==
+            pair[1]
+        ),
+
+      n_2 =
+        sum(
+          pair_data$compound ==
+            pair[2]
+        ),
+
+      variables =
+        "PC1 + PC2",
+
+      Pillai_trace =
+        as.numeric(
+          pair_stats[
+            effect_row,
+            "Pillai"
+          ]
+        ),
+
+      approximate_F =
+        as.numeric(
+          pair_stats[
+            effect_row,
+            "approx F"
+          ]
+        ),
+
+      numerator_df =
+        as.numeric(
+          pair_stats[
+            effect_row,
+            "num Df"
+          ]
+        ),
+
+      denominator_df =
+        as.numeric(
+          pair_stats[
+            effect_row,
+            "den Df"
+          ]
+        ),
+
+      p_value =
+        as.numeric(
+          pair_stats[
+            effect_row,
+            "Pr(>F)"
+          ]
+        ),
+
+      stringsAsFactors =
+        FALSE
+    )
+
+
+    pairwise_counter <-
+      pairwise_counter + 1
+  }
+}
+
+
+
+if (length(pairwise_MANOVA_list) > 0) {
+
+
+  pairwise_MANOVA <- do.call(
+    rbind,
+    pairwise_MANOVA_list
+  )
+
+
+  rownames(
+    pairwise_MANOVA
+  ) <- NULL
+
+
+  pairwise_MANOVA$FDR <- NA_real_
+
+
+  for (
+    site_name in unique(
+      pairwise_MANOVA$site
+    )
+  ) {
+
+
+    idx <- which(
+      pairwise_MANOVA$site ==
+        site_name
+    )
+
+
+    pairwise_MANOVA$FDR[idx] <- p.adjust(
+
+      pairwise_MANOVA$p_value[idx],
+
+      method =
+        FDR_METHOD
+    )
+  }
+
+
+  pairwise_MANOVA$significant_FDR <-
+    pairwise_MANOVA$FDR <=
+    FDR_THRESHOLD
+
+
+} else {
+
+
+  pairwise_MANOVA <- data.frame()
+}
+
+
+
+# ==============================================================================
+# 15. POOLED WITHIN-GROUP COVARIANCE
+# ==============================================================================
+
+calculate_pooled_covariance <- function(
+    X,
+    grouping
+) {
+
+
+  grouping <- droplevels(
+    factor(
+      grouping
+    )
+  )
+
+
+  groups <- levels(
+    grouping
+  )
+
+
+  p <- ncol(X)
+
+
+  pooled_sum <- matrix(
+    0,
+    nrow = p,
+    ncol = p
+  )
+
+
+  total_df <- 0
+
+
+  for (g in groups) {
+
+
+    Xg <- X[
+      grouping == g,
+      ,
+      drop = FALSE
+    ]
+
+
+    ng <- nrow(
+      Xg
+    )
+
+
+    if (ng <= 1) {
+
+      next
+    }
+
+
+    Sg <- cov(
+      Xg
+    )
+
+
+    pooled_sum <-
+      pooled_sum +
+      (ng - 1) *
+      Sg
+
+
+    total_df <-
+      total_df +
+      (ng - 1)
+  }
+
+
+  if (total_df <= 0) {
+
+    stop(
+      "Unable to estimate pooled covariance matrix.",
+      call. = FALSE
+    )
+  }
+
+
+  pooled_covariance <-
+    pooled_sum /
+    total_df
+
+
+  rownames(
+    pooled_covariance
+  ) <- colnames(X)
+
+
+  colnames(
+    pooled_covariance
+  ) <- colnames(X)
+
+
+  pooled_covariance
+}
+
+
+
+# ==============================================================================
+# 16. SAFE COVARIANCE MATRIX INVERSE
+# ==============================================================================
+
+safe_inverse <- function(
+    covariance_matrix,
+    tolerance = SINGULARITY_TOLERANCE
+) {
+
+
+  eigenvalues <- tryCatch(
+
+    eigen(
+      covariance_matrix,
+      symmetric = TRUE,
+      only.values = TRUE
+    )$values,
+
+    error = function(e) {
+
+      c(
+        NA_real_
+      )
+    }
+  )
+
+
+  use_generalized_inverse <- any(
+    !is.finite(
+      eigenvalues
+    )
+  )
+
+
+  if (!use_generalized_inverse) {
+
+
+    if (
+      min(
+        abs(
+          eigenvalues
+        )
+      ) < tolerance
+    ) {
+
+      use_generalized_inverse <- TRUE
+    }
+  }
+
+
+  if (!use_generalized_inverse) {
+
+
+    standard_inverse <- tryCatch(
+
+      solve(
+        covariance_matrix
+      ),
+
+      error = function(e) {
+
+        NULL
+      }
+    )
+
+
+    if (!is.null(standard_inverse)) {
+
+
+      return(
+        list(
+
+          inverse =
+            standard_inverse,
+
+          method =
+            "Standard matrix inverse"
+        )
+      )
+    }
+  }
+
+
+  list(
+
+    inverse =
+      MASS::ginv(
+        covariance_matrix
+      ),
+
+    method =
+      "Generalized inverse (MASS::ginv)"
+  )
+}
+
+
+
+# ==============================================================================
+# 17. MAHALANOBIS DISTANCE BETWEEN PC1-PC2 CENTROIDS
+# ==============================================================================
+
+Mahalanobis_results_list <- list()
+
+Mahalanobis_matrices <- list()
+
+centroid_results <- list()
+
+pooled_covariance_matrices <- list()
+
+
+mahalanobis_counter <- 1
+
+
+
+for (site_name in sites) {
+
+
+  cat(
+    "\n============================================================\n",
+    "MAHALANOBIS — ",
+    site_name,
+    "\n",
+    "PC1 × PC2 CENTROIDS\n",
+    "============================================================\n",
+    sep = ""
+  )
+
+
+  site_data <- scores[
+    scores$site == site_name,
+    c(
+      "compound",
+      "PC1",
+      "PC2"
+    ),
+    drop = FALSE
+  ]
+
+
+  site_data$compound <- droplevels(
+    factor(
+      site_data$compound
+    )
+  )
+
+
+  compounds <- levels(
+    site_data$compound
+  )
+
+
+  if (length(compounds) < 2) {
+
+    next
+  }
+
+
+  X <- as.matrix(
+    site_data[
+      ,
+      c(
+        "PC1",
+        "PC2"
+      ),
+      drop = FALSE
+    ]
+  )
+
+
+  grouping <- site_data$compound
+
+
+
+  # ===========================================================================
+  # POOLED WITHIN-GROUP COVARIANCE
+  # ===========================================================================
+
+  pooled_covariance <- calculate_pooled_covariance(
+    X,
+    grouping
+  )
+
+
+  pooled_covariance_matrices[[site_name]] <-
+    pooled_covariance
+
+
+  inverse_result <- safe_inverse(
+    pooled_covariance
+  )
+
+
+  S_inverse <-
+    inverse_result$inverse
+
+
+  inverse_method <-
+    inverse_result$method
+
+
+
+  # ===========================================================================
+  # CENTROIDS
+  #
+  # These are the coordinates corresponding to the centroid diamonds
+  # displayed in the PC1 × PC2 figure.
+  # ===========================================================================
+
+  centroid_matrix <- do.call(
+
+    rbind,
+
+    lapply(
+      compounds,
+      function(compound_name) {
+
+
+        colMeans(
+          X[
+            grouping ==
+              compound_name,
+            ,
+            drop = FALSE
+          ],
+          na.rm = TRUE
+        )
+      }
+    )
+  )
+
+
+  rownames(
+    centroid_matrix
+  ) <- compounds
+
+
+  colnames(
+    centroid_matrix
+  ) <- c(
+    "PC1",
+    "PC2"
+  )
+
+
+
+  centroid_results[[site_name]] <- data.frame(
+
+    site =
+      site_name,
+
+    compound =
+      rownames(
+        centroid_matrix
+      ),
+
+    PC1_centroid =
+      centroid_matrix[
+        ,
+        "PC1"
+      ],
+
+    PC2_centroid =
+      centroid_matrix[
+        ,
+        "PC2"
+      ],
+
+    stringsAsFactors =
+      FALSE,
+
+    row.names =
+      NULL
+  )
+
+
+
+  # ===========================================================================
+  # DISTANCE MATRIX
+  # ===========================================================================
+
+  distance_matrix <- matrix(
+
+    0,
+
+    nrow =
+      length(compounds),
+
+    ncol =
+      length(compounds),
+
+    dimnames = list(
+      compounds,
+      compounds
+    )
+  )
+
+
+
+  compound_pairs <- combn(
+    compounds,
+    2,
+    simplify = FALSE
+  )
+
+
+
+  # ===========================================================================
+  # PAIRWISE MAHALANOBIS DISTANCES
+  # ===========================================================================
+
+  for (pair in compound_pairs) {
+
+
+    centroid_1 <- as.numeric(
+      centroid_matrix[
+        pair[1],
+        c(
+          "PC1",
+          "PC2"
+        )
+      ]
+    )
+
+
+    centroid_2 <- as.numeric(
+      centroid_matrix[
+        pair[2],
+        c(
+          "PC1",
+          "PC2"
+        )
+      ]
+    )
+
+
+    delta <- centroid_1 -
+      centroid_2
+
+
+
+    # -------------------------------------------------------------------------
+    # EUCLIDEAN DISTANCE
+    #
+    # Included only as a complementary reference because this is the direct
+    # geometric distance visible in the PC1-PC2 plot.
+    # -------------------------------------------------------------------------
+
+    Euclidean_D <- sqrt(
+      sum(
+        delta^2
+      )
+    )
+
+
+
+    # -------------------------------------------------------------------------
+    # MAHALANOBIS D²
+    # -------------------------------------------------------------------------
+
+    Mahalanobis_D2 <- as.numeric(
+
+      t(delta) %*%
+        S_inverse %*%
+        delta
+    )
+
+
+
+    # Protect against tiny numerical negative values
+
+    if (
+      is.finite(
+        Mahalanobis_D2
+      ) &&
+      Mahalanobis_D2 < 0 &&
+      abs(
+        Mahalanobis_D2
+      ) < 1e-12
+    ) {
+
+      Mahalanobis_D2 <- 0
+    }
+
+
+
+    if (
+      !is.finite(
+        Mahalanobis_D2
+      ) ||
+      Mahalanobis_D2 < 0
+    ) {
+
+
+      Mahalanobis_D <- NA_real_
+
+
+    } else {
+
+
+      Mahalanobis_D <- sqrt(
+        Mahalanobis_D2
+      )
+    }
+
+
+
+    # -------------------------------------------------------------------------
+    # FILL SYMMETRIC MATRIX
+    # -------------------------------------------------------------------------
+
+    distance_matrix[
+      pair[1],
+      pair[2]
+    ] <- Mahalanobis_D
+
+
+    distance_matrix[
+      pair[2],
+      pair[1]
+    ] <- Mahalanobis_D
+
+
+
+    # -------------------------------------------------------------------------
+    # STORE RESULTS
+    # -------------------------------------------------------------------------
+
+    Mahalanobis_results_list[[mahalanobis_counter]] <- data.frame(
+
+      site =
+        site_name,
+
+      compound_1 =
+        pair[1],
+
+      compound_2 =
+        pair[2],
+
+      PC1_centroid_compound_1 =
+        centroid_1[1],
+
+      PC2_centroid_compound_1 =
+        centroid_1[2],
+
+      PC1_centroid_compound_2 =
+        centroid_2[1],
+
+      PC2_centroid_compound_2 =
+        centroid_2[2],
+
+      delta_PC1 =
+        delta[1],
+
+      delta_PC2 =
+        delta[2],
+
+      Euclidean_D_PC1_PC2 =
+        Euclidean_D,
+
+      Mahalanobis_D =
+        Mahalanobis_D,
+
+      Mahalanobis_D2 =
+        Mahalanobis_D2,
+
+      covariance_inverse_method =
+        inverse_method,
+
+      stringsAsFactors =
+        FALSE
+    )
+
+
+    mahalanobis_counter <-
+      mahalanobis_counter + 1
+  }
+
+
+
+  Mahalanobis_matrices[[site_name]] <-
+    distance_matrix
+}
+
+
+
+# ==============================================================================
+# 18. COMBINE MAHALANOBIS RESULTS
+# ==============================================================================
+
+if (length(Mahalanobis_results_list) > 0) {
+
+
+  Mahalanobis_results <- do.call(
+    rbind,
+    Mahalanobis_results_list
+  )
+
+
+  rownames(
+    Mahalanobis_results
+  ) <- NULL
+
+
+} else {
+
+
+  Mahalanobis_results <- data.frame()
+}
+
+
+
+# ==============================================================================
+# 19. COMBINE CENTROIDS
+#
+# Every site now contains exactly:
+#
+# site
+# compound
+# PC1_centroid
+# PC2_centroid
+#
+# Therefore regular rbind() is safe.
+# ==============================================================================
+
+if (length(centroid_results) > 0) {
+
+
+  group_centroids <- do.call(
+    rbind,
+    centroid_results
+  )
+
+
+  rownames(
+    group_centroids
+  ) <- NULL
+
+
+} else {
+
+
+  group_centroids <- data.frame()
+}
+
+
+
+# ==============================================================================
+# 20. BOX'S M TEST
+# ==============================================================================
+
+BoxM_results <- list()
+
+
+if (has_biotools) {
+
+
+  for (site_name in sites) {
+
+
+    site_data <- scores[
+      scores$site == site_name,
+      c(
+        "compound",
+        "PC1",
+        "PC2"
+      ),
+      drop = FALSE
+    ]
+
+
+    site_data$compound <- droplevels(
+      factor(
+        site_data$compound
+      )
+    )
+
+
+    if (nlevels(site_data$compound) < 2) {
+
+      next
+    }
+
+
+    X <- as.matrix(
+      site_data[
+        ,
+        c(
+          "PC1",
+          "PC2"
+        ),
+        drop = FALSE
+      ]
+    )
+
+
+    box_result <- tryCatch(
+
+      suppressWarnings(
+
+        biotools::boxM(
+          X,
+          site_data$compound
+        )
+
+      ),
+
+      error = function(e) {
+
+        NULL
+      }
+    )
+
+
+    if (!is.null(box_result)) {
+
+
+      BoxM_results[[site_name]] <- data.frame(
+
+        site =
+          site_name,
+
+        variables =
+          "PC1 + PC2",
+
+        chi_square =
+          as.numeric(
+            box_result$statistic
+          ),
+
+        df =
+          as.numeric(
+            box_result$parameter
+          ),
+
+        p_value =
+          as.numeric(
+            box_result$p.value
+          ),
+
+        stringsAsFactors =
+          FALSE
+      )
+    }
+  }
+}
+
+
+
+if (length(BoxM_results) > 0) {
+
+
+  BoxM_table <- do.call(
+    rbind,
+    BoxM_results
+  )
+
+
+  rownames(
+    BoxM_table
+  ) <- NULL
+
+
+} else {
+
+
+  BoxM_table <- data.frame()
+}
+
+
+
+# ==============================================================================
+# 21. MAHALANOBIS HEATMAPS
+# ==============================================================================
+
+for (
+  site_name in names(
+    Mahalanobis_matrices
+  )
+) {
+
+
+  M <- Mahalanobis_matrices[[site_name]]
+
+
+  heatmap_df <- as.data.frame(
+    as.table(
+      M
+    )
+  )
+
+
+  names(
+    heatmap_df
+  ) <- c(
+    "Compound_1",
+    "Compound_2",
+    "Mahalanobis_D"
+  )
+
+
+  heatmap_df$Compound_1 <- factor(
+    heatmap_df$Compound_1,
+    levels =
+      rownames(M)
+  )
+
+
+  heatmap_df$Compound_2 <- factor(
+    heatmap_df$Compound_2,
+    levels =
+      rev(
+        colnames(M)
+      )
+  )
+
+
+  p <- ggplot(
+    heatmap_df,
+    aes(
+      x =
+        Compound_1,
+      y =
+        Compound_2,
+      fill =
+        Mahalanobis_D
+    )
+  ) +
+
+    geom_tile(
+      linewidth = 0.5
+    ) +
+
+    geom_text(
+      aes(
+        label = sprintf(
+          "%.2f",
+          Mahalanobis_D
+        )
+      ),
+      size = 4
+    ) +
+
+    scale_fill_gradient(
+      low = "white",
+      high = "grey35"
+    ) +
+
+    coord_fixed() +
+
+    labs(
+
+      title =
+        paste0(
+          site_name,
+          " - Mahalanobis distance in PC1 × PC2 space"
+        ),
+
+      x = NULL,
+
+      y = NULL,
+
+      fill =
+        "Mahalanobis D"
+    ) +
+
+    theme_classic(
+      base_size = 12
+    ) +
+
+    theme(
+
+      axis.text.x =
+        element_text(
+          angle = 45,
+          hjust = 1
+        ),
+
+      plot.title =
+        element_text(
+          face = "bold"
+        )
+    )
+
+
+  ggsave(
+
+    filename = file.path(
+      output_dir,
+      paste0(
+        "Mahalanobis_PC1_PC2_",
+        site_name,
+        ".png"
+      )
+    ),
+
+    plot =
+      p,
+
+    width =
+      7,
+
+    height =
+      5.5,
+
+    dpi =
+      heatmap_dpi,
+
+    bg =
+      "white"
+  )
+}
+
+
+
+# ==============================================================================
+# 22. EXCEL OUTPUT
+# ==============================================================================
+
+output_excel <- file.path(
+  output_dir,
+  "MANOVA_Mahalanobis_PC1_PC2_results.xlsx"
+)
+
+
+wb <- createWorkbook()
+
+
+
+# ==============================================================================
+# 23. EXCEL STYLE
+# ==============================================================================
+
+header_style <- createStyle(
+
+  textDecoration =
+    "bold",
+
+  halign =
+    "center",
+
+  valign =
+    "center",
+
+  border =
+    "Bottom"
+)
+
+
+
+# ==============================================================================
+# 24. EXCEL HELPER
+# ==============================================================================
+
+add_table_sheet <- function(
+    workbook,
+    sheet_name,
+    data
+) {
+
+
+  addWorksheet(
+    workbook,
+    sheet_name
+  )
+
+
+  if (
+    !is.null(data) &&
+    nrow(data) > 0 &&
+    ncol(data) > 0
+  ) {
+
+
+    writeData(
+      workbook,
+      sheet_name,
+      data
+    )
+
+
+    addStyle(
+
+      workbook,
+      sheet_name,
+
+      style =
+        header_style,
+
+      rows =
+        1,
+
+      cols =
+        seq_len(
+          ncol(data)
+        ),
+
+      gridExpand =
+        TRUE,
+
+      stack =
+        TRUE
+    )
+
+
+    freezePane(
+      workbook,
+      sheet_name,
+      firstRow = TRUE
+    )
+
+
+    setColWidths(
+      workbook,
+      sheet_name,
+      cols =
+        seq_len(
+          ncol(data)
+        ),
+      widths =
+        "auto"
+    )
+  }
+}
+
+
+
+# ==============================================================================
+# 25. ANALYSIS SETTINGS
+# ==============================================================================
+
+analysis_settings <- data.frame(
+
+  Parameter = c(
+
+    "PCA dimensions used",
+
+    "Reason for dimension selection",
+
+    "MANOVA statistic",
+
+    "Pairwise correction",
+
+    "FDR threshold",
+
+    "Mahalanobis covariance matrix",
+
+    "Mahalanobis comparison"
+  ),
+
+  Value = c(
+
+    "PC1 and PC2 only",
+
+    "Distances correspond to centroids displayed in the PC1 × PC2 PCA figure",
+
+    "Pillai's trace",
+
+    FDR_METHOD,
+
+    FDR_THRESHOLD,
+
+    "Pooled within-group covariance of PC1 and PC2",
+
+    "Compound centroids in PC1 × PC2 space"
+  ),
+
+  stringsAsFactors =
+    FALSE
+)
+
+
+
+# ==============================================================================
+# 26. EXPORT MAIN TABLES
+# ==============================================================================
+
+add_table_sheet(
+  wb,
+  "Analysis_settings",
+  analysis_settings
+)
+
+
+add_table_sheet(
+  wb,
+  "Explained_variance",
+  variance_summary
+)
+
+
+add_table_sheet(
+  wb,
+  "Sample_sizes",
+  sample_sizes
+)
+
+
+add_table_sheet(
+  wb,
+  "MANOVA_omnibus",
+  MANOVA_omnibus
+)
+
+
+add_table_sheet(
+  wb,
+  "MANOVA_pairwise",
+  pairwise_MANOVA
+)
+
+
+add_table_sheet(
+  wb,
+  "Mahalanobis_pairs",
+  Mahalanobis_results
+)
+
+
+add_table_sheet(
+  wb,
+  "Group_centroids",
+  group_centroids
+)
+
+
+if (nrow(BoxM_table) > 0) {
+
+
+  add_table_sheet(
+    wb,
+    "BoxM",
+    BoxM_table
+  )
+}
+
+
+
+# ==============================================================================
+# 27. EXPORT MAHALANOBIS DISTANCE MATRICES
+# ==============================================================================
+
+for (
+  site_name in names(
+    Mahalanobis_matrices
+  )
+) {
+
+
+  M <- Mahalanobis_matrices[[site_name]]
+
+
+  matrix_df <- data.frame(
+
+    compound =
+      rownames(M),
+
+    M,
+
+    check.names =
+      FALSE,
+
+    row.names =
+      NULL
+  )
+
+
+  sheet_name <- paste0(
+    "D_",
+    site_name
+  )
+
+
+  sheet_name <- substr(
+    sheet_name,
+    1,
+    31
+  )
+
+
+  add_table_sheet(
+    wb,
+    sheet_name,
+    matrix_df
+  )
+}
+
+
+
+# ==============================================================================
+# 28. EXPORT POOLED COVARIANCE MATRICES
+# ==============================================================================
+
+for (
+  site_name in names(
+    pooled_covariance_matrices
+  )
+) {
+
+
+  S <- pooled_covariance_matrices[[site_name]]
+
+
+  covariance_df <- data.frame(
+
+    variable =
+      rownames(S),
+
+    S,
+
+    check.names =
+      FALSE,
+
+    row.names =
+      NULL
+  )
+
+
+  sheet_name <- paste0(
+    "Cov_PC1PC2_",
+    site_name
+  )
+
+
+  sheet_name <- substr(
+    sheet_name,
+    1,
+    31
+  )
+
+
+  add_table_sheet(
+    wb,
+    sheet_name,
+    covariance_df
+  )
+}
+
+
+
+# ==============================================================================
+# 29. SAVE EXCEL
+# ==============================================================================
+
+saveWorkbook(
+  wb,
+  output_excel,
+  overwrite = TRUE
+)
+
+
+
+# ==============================================================================
+# 30. CONSOLE SUMMARY
+# ==============================================================================
+
+cat(
+  "\n\n============================================================\n",
+  "ANALYSIS COMPLETED\n",
+  "============================================================\n\n",
+  sep = ""
+)
+
+
+cat(
+  "Multivariate space used: PC1 × PC2 ONLY\n\n"
+)
+
+
+cat(
+  "This corresponds directly to the centroid positions displayed\n",
+  "in the two-dimensional PCA figure.\n\n",
+  sep = ""
+)
+
+
+
+cat(
+  "============================================================\n",
+  "EXPLAINED VARIANCE\n",
+  "============================================================\n\n",
+  sep = ""
+)
+
+
+print(
+  variance_summary,
+  row.names = FALSE
+)
+
+
+
+cat(
+  "\n\n============================================================\n",
+  "OMNIBUS MANOVA — PILLAI'S TRACE\n",
+  "============================================================\n\n",
+  sep = ""
+)
+
+
+print(
+  MANOVA_omnibus,
+  row.names = FALSE
+)
+
+
+
+cat(
+  "\n\n============================================================\n",
+  "PAIRWISE MANOVA — BH-FDR\n",
+  "============================================================\n\n",
+  sep = ""
+)
+
+
+print(
+  pairwise_MANOVA,
+  row.names = FALSE
+)
+
+
+
+cat(
+  "\n\n============================================================\n",
+  "PC1 × PC2 CENTROIDS\n",
+  "============================================================\n\n",
+  sep = ""
+)
+
+
+print(
+  group_centroids,
+  row.names = FALSE
+)
+
+
+
+cat(
+  "\n\n============================================================\n",
+  "MAHALANOBIS DISTANCES BETWEEN CENTROIDS\n",
+  "============================================================\n\n",
+  sep = ""
+)
+
+
+print(
+  Mahalanobis_results,
+  row.names = FALSE
+)
+
+
+
+if (nrow(BoxM_table) > 0) {
+
+
+  cat(
+    "\n\n============================================================\n",
+    "BOX'S M\n",
+    "============================================================\n\n",
+    sep = ""
+  )
+
+
+  print(
+    BoxM_table,
+    row.names = FALSE
+  )
+}
+
+
+
+cat(
+  "\n\nExcel output:\n",
+  output_excel,
+  "\n",
+  sep = ""
+)
+
+
+cat(
+  "\nHeatmaps/output folder:\n",
+  output_dir,
+  "\n\n",
+  sep = ""
+)
