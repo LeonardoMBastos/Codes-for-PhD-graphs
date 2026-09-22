@@ -1,0 +1,42 @@
+# ============================================================
+# RECEPTOR #1 COMO SILHUETA BORDÔ ESCURO, GROSSA, SEM PREENCHIMENTO
+# ============================================================
+
+# Limpeza geral
+close #2
+label delete
+contacts delete
+hbonds delete
+clashes delete
+select clear
+
+# Esconder tudo do receptor
+hide #1 atoms
+hide #1 cartoons
+hide #1 ribbons
+hide #1 surfaces
+
+# Mostrar somente uma representação do receptor
+surface #1
+
+# Cor bordô escuro
+color name bordo_escuro rgb(45%,3%,8%)
+color #1 bordo_escuro
+
+# Remover preenchimento visual
+# Se 100 ocultar demais no seu ChimeraX, troque para 99
+transparency #1 100
+
+# Ativar silhueta grossa
+graphics silhouettes true color bordo_escuro width 4
+
+# Fundo branco
+set bgColor white
+lighting soft
+
+# Ajustar visão
+view #1
+zoom 1.2
+
+# Salvar sem fundo
+save receptor_silhueta.png transparentBackground true width 4000
