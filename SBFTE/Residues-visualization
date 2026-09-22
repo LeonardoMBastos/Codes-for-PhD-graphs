@@ -1,0 +1,152 @@
+# ============================================================
+# LIGAND–RECEPTOR INTERACTION VIEW
+#
+# Receptor = #1
+# Ligand   = #2
+#
+# IMPORTANT LIMITATION:
+# Native 3D residue labels in ChimeraX do NOT provide:
+# 1) a truly thick black outline around text
+# 2) true occlusion by molecular geometry as desired
+#
+# Best practical workaround:
+# - black residue labels
+# - attached to primary atom
+# - no white label background
+# - no onTop
+# - subtler contacts
+# ============================================================
+
+
+# ------------------------------------------------------------
+# 1. CLEAN EVERYTHING
+# ------------------------------------------------------------
+
+contacts delete
+hbonds delete
+clashes delete
+label delete
+select clear
+name delete contactres
+
+
+# ------------------------------------------------------------
+# 2. INITIAL DISPLAY
+# ------------------------------------------------------------
+
+hide #1 atoms
+hide #1 cartoons
+hide #1 surfaces
+
+hide #2 cartoons
+hide #2 surfaces
+
+show #2 atoms
+style #2 stick
+size #2 stickRadius 0.20
+
+
+# ------------------------------------------------------------
+# 3. LIGAND COLORED BY ELEMENT
+# ------------------------------------------------------------
+
+color #2 byelement target a halfbond true
+
+
+# ------------------------------------------------------------
+# 4. IDENTIFY CONTACT RESIDUES (<= 4.0 Å FROM LIGAND)
+# ------------------------------------------------------------
+
+select (#2 :< 4.0) & #1
+name frozen contactres sel
+
+
+# ------------------------------------------------------------
+# 5. SHOW ONLY CONTACT RESIDUES
+# ------------------------------------------------------------
+
+hide #1 atoms
+hide #1 cartoons
+hide #1 surfaces
+
+show contactres atoms
+style contactres stick
+size contactres stickRadius 0.16
+
+
+# ------------------------------------------------------------
+# 6. SOLID BURGUNDY CONTACT RESIDUES
+# ------------------------------------------------------------
+
+color name bordo rgb(55%,4%,7%)
+color contactres bordo target a
+
+
+# ------------------------------------------------------------
+# 7. RE-APPLY LIGAND APPEARANCE
+# ------------------------------------------------------------
+
+show #2 atoms
+style #2 stick
+size #2 stickRadius 0.20
+color #2 byelement target a halfbond true
+
+
+# ------------------------------------------------------------
+# 8. GENERIC CONTACTS
+#    highly transparent black
+# ------------------------------------------------------------
+
+contacts #2 restrict #1 interModel true distanceOnly 4.0 reveal true showDist false color #00000018 radius 0.040 dashes 6 name "Ligand contacts"
+
+
+# ------------------------------------------------------------
+# 9. HYDROGEN BONDS
+#    transparent blue, slightly more visible
+# ------------------------------------------------------------
+
+hbonds #2 restrict #1 interModel true reveal true showDist false color #1E90FF40 radius 0.070 dashes 6 name "Ligand H-bonds"
+
+
+# ------------------------------------------------------------
+# 10. RESTORE FINAL DISPLAY
+# ------------------------------------------------------------
+
+hide #1 atoms
+show contactres atoms
+style contactres stick
+size contactres stickRadius 0.16
+color contactres bordo target a
+
+show #2 atoms
+style #2 stick
+size #2 stickRadius 0.20
+color #2 byelement target a halfbond true
+
+
+# ------------------------------------------------------------
+# 11. LABELS
+#    Best practical solution inside ChimeraX:
+#    black text, no background, attached to residue
+# ------------------------------------------------------------
+
+label delete
+label contactres residues text "{0.name}{0.number}" color black bgColor none height fixed size 15 font Arial position "primary atom" offset 0.06,0.06,0.10
+
+
+# ------------------------------------------------------------
+# 12. FINAL APPEARANCE
+# ------------------------------------------------------------
+
+select clear
+set bgColor white
+lighting soft
+graphics silhouettes true color black width 1
+
+
+# ------------------------------------------------------------
+# 13. CENTER VIEW
+# ------------------------------------------------------------
+
+view contactres
+zoom 1.15
