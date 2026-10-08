@@ -1,0 +1,2872 @@
+# ==============================================================================
+# CHORD DIAGRAM BY SITE × COMPOUND
+# TOP 10 MOST FREQUENT RESIDUES WITHIN EACH SITE × COMPOUND GROUP
+# SPEARMAN CORRELATIONS + GROUP-SPECIFIC PCA LOADING RINGS
+# ==============================================================================
+#
+# NEW ANALYTICAL RATIONALE
+# ------------------------
+# Every analysis is performed independently for each SITE × COMPOUND subset.
+# No residue-contact information from one compound is pooled with another
+# compound when calculating:
+#
+#   1. residue frequencies / Top 10 residues
+#   2. Hellinger-transformed residue fingerprints
+#   3. Spearman residue-residue correlations
+#   4. Benjamini-Hochberg FDR correction
+#   5. PCA loadings and explained variance shown in the rings
+#
+# If the input contains 3 sites and 4 compounds in each site, 12 independent
+# chord diagrams will be generated.
+# ==============================================================================
+
+
+# ==============================================================================
+# 0. SETTINGS
+# ==============================================================================
+
+maximum_FDR <- 0.05
+top_n_residues <- 10
+min_abs_correlation <- 0.00
+
+font_family <- "sans"
+output_background <- "white"
+sector_gap_degree <- 1.2
+
+# Shared text sizes
+# Increased for print legibility when 4 diagrams are arranged in a 2 × 2 layout.
+# Title size is intentionally kept unchanged later in the plotting function.
+text_cex <- 1.18
+residue_label_cex <- 1.18
+annotation_text_cex <- 1.18
+legend_text_cex <- 1.20
+
+# Chord track dimensions
+residue_track_height <- 0.19
+PC1_track_height <- 0.058
+PC2_track_height <- 0.058
+
+# Bottom horizontal legend geometry
+legend_bar_length <- 0.94
+legend_bar_height <- 0.070
+legend_y_bottom <- -1.22
+legend_title_offset <- 0.090
+legend_tick_offset <- 0.060
+
+# Fixed gap between the INNER ends of the two horizontal gradient bars.
+# Prevents +1 and -1 tick labels from overlapping in a 2 x 2 print layout.
+legend_bar_gap <- 0.36
+
+loading_legend_center_x <- -(legend_bar_length + legend_bar_gap) / 2
+correlation_legend_center_x <- (legend_bar_length + legend_bar_gap) / 2
+
+# PCA information position
+PC_info_x <- -1.18
+PC1_info_y <- 1.03
+PC2_info_y <- 0.94
+
+# Export dimensions
+png_width <- 5000
+png_height <- 4000
+png_res <- 450
+
+tiff_width <- 7000
+tiff_height <- 5600
+tiff_res <- 600
+
+
+# ==============================================================================
+# 1. PACKAGES
+# ==============================================================================
+
+required_packages <- c(
+  "circlize",
+  "openxlsx"
+)
+
+missing_packages <- required_packages[
+  !vapply(
+    required_packages,
+    requireNamespace,
+    logical(1),
+    quietly = TRUE
+  )
+]
+
+if (length(missing_packages) > 0) {
+  install.packages(missing_packages)
+}
+
+library(circlize)
+library(openxlsx)
+
+
+# ==============================================================================
+# 2. HELPERS
+# ==============================================================================
+
+safe_num <- function(x) {
+  suppressWarnings(
+    as.numeric(
+      gsub(
+        ",",
+        ".",
+        as.character(x),
+        fixed = TRUE
+      )
+    )
+  )
+}
+
+
+normalize_site <- function(x) {
+
+  y <- toupper(
+    trimws(
+      as.character(x)
+    )
+  )
+
+  y[
+    y %in% c(
+      "BZD",
+      "BENZODIAZEPINE",
+      "BENZODIAZEPINES",
+      "BENZODIAZEPINE SITE",
+      "BZD SITE"
+    )
+  ] <- "BZD"
+
+  y[
+    y %in% c(
+      "BB",
+      "BARBITURATE",
+      "BARBITURATES",
+      "BARBITURATE SITE",
+      "BARBITURATES SITE"
+    )
+  ] <- "BB"
+
+  y[
+    y %in% c(
+      "GABA",
+      "GABA SITE",
+      "ORTHOSTERIC",
+      "ORTHOSTERIC SITE"
+    )
+  ] <- "GABA"
+
+  y
+}
+
+
+normalize_compound <- function(x) {
+
+  y <- toupper(
+    trimws(
+      as.character(x)
+    )
+  )
+
+  # Standardize only well-known spelling variants.
+  # Any other compound name is retained as supplied, in upper case.
+  y[y %in% c("GERANIOL", "GER")] <- "GER"
+
+  y[
+    y %in% c(
+      "GERANYL ACETATE",
+      "GERANYL_ACETATE",
+      "GERANYL-ACETATE",
+      "GER AC",
+      "GERAC"
+    )
+  ] <- "GERAC"
+
+  y[y %in% c("DIAZEPAM", "DZP")] <- "DZP"
+
+  y[
+    y %in% c(
+      "PHENOBARBITAL",
+      "PHENOBARBITONE",
+      "PHB"
+    )
+  ] <- "PHB"
+
+  y[
+    y %in% c(
+      "GAMMA-AMINOBUTYRIC ACID",
+      "GAMMA AMINOBUTYRIC ACID",
+      "GABA"
+    )
+  ] <- "GABA"
+
+  y
+}
+
+
+normalize_residue <- function(x) {
+
+  toupper(
+    gsub(
+      "\\s+",
+      "",
+      trimws(
+        as.character(x)
+      )
+    )
+  )
+}
+
+
+normalize_column_name <- function(x) {
+
+  tolower(
+    gsub(
+      "[^a-z0-9]",
+      "",
+      x
+    )
+  )
+}
+
+
+find_column <- function(
+    df,
+    candidates
+) {
+
+  normalized_names <- normalize_column_name(
+    names(df)
+  )
+
+  normalized_candidates <- normalize_column_name(
+    candidates
+  )
+
+  for (candidate in normalized_candidates) {
+
+    hit <- which(
+      normalized_names == candidate
+    )
+
+    if (length(hit) > 0) {
+      return(
+        names(df)[hit[1]]
+      )
+    }
+  }
+
+  NULL
+}
+
+
+safe_filename_component <- function(x) {
+
+  y <- gsub(
+    "[^A-Za-z0-9_-]+",
+    "_",
+    as.character(x)
+  )
+
+  y <- gsub(
+    "_+",
+    "_",
+    y
+  )
+
+  y <- gsub(
+    "^_|_$",
+    "",
+    y
+  )
+
+  ifelse(
+    nchar(y) == 0,
+    "NA",
+    y
+  )
+}
+
+
+create_output_directory <- function(
+    input_file
+) {
+
+  output_dir <- file.path(
+    dirname(input_file),
+    "Chord_Diagram_By_Compound_Site"
+  )
+
+  dir.create(
+    output_dir,
+    recursive = TRUE,
+    showWarnings = FALSE
+  )
+
+  output_dir
+}
+
+
+safe_output_file <- function(
+    directory,
+    filename
+) {
+
+  candidate <- file.path(
+    directory,
+    filename
+  )
+
+  if (!file.exists(candidate)) {
+    return(candidate)
+  }
+
+  deleted <- tryCatch(
+    {
+      unlink(
+        candidate,
+        force = TRUE
+      )
+
+      !file.exists(candidate)
+    },
+    error = function(e) {
+      FALSE
+    }
+  )
+
+  if (deleted) {
+    return(candidate)
+  }
+
+  extension <- tools::file_ext(
+    filename
+  )
+
+  base_name <- tools::file_path_sans_ext(
+    basename(
+      filename
+    )
+  )
+
+  timestamp <- format(
+    Sys.time(),
+    "%Y%m%d_%H%M%S"
+  )
+
+  file.path(
+    directory,
+    paste0(
+      base_name,
+      "_",
+      timestamp,
+      ".",
+      extension
+    )
+  )
+}
+
+
+empty_edges_table <- function() {
+
+  data.frame(
+    site = character(0),
+    compound = character(0),
+    residue_1 = character(0),
+    residue_2 = character(0),
+    n = integer(0),
+    spearman_rho = numeric(0),
+    spearman_abs = numeric(0),
+    spearman_p = numeric(0),
+    spearman_FDR = numeric(0),
+    stringsAsFactors = FALSE
+  )
+}
+
+
+# ==============================================================================
+# 3. SELECT ORIGINAL RESIDUE-CONTACT FILE
+# ==============================================================================
+
+cat(
+  "\n============================================================\n",
+  "SELECT ORIGINAL RESIDUE-CONTACT DATA FILE\n",
+  "Expected: CSV, XLSX or XLS\n",
+  "============================================================\n\n",
+  sep = ""
+)
+
+raw_file <- file.choose()
+
+
+# ==============================================================================
+# 4. READ ORIGINAL DATA
+# ==============================================================================
+
+read_original_data <- function(path) {
+
+  extension <- tolower(
+    tools::file_ext(path)
+  )
+
+  if (extension %in% c("xlsx", "xls")) {
+
+    return(
+      openxlsx::read.xlsx(
+        path,
+        check.names = FALSE
+      )
+    )
+  }
+
+  if (extension == "csv") {
+
+    first_try <- tryCatch(
+      read.csv(
+        path,
+        check.names = FALSE,
+        stringsAsFactors = FALSE
+      ),
+      error = function(e) {
+        NULL
+      }
+    )
+
+    if (
+      !is.null(first_try) &&
+      ncol(first_try) > 1
+    ) {
+      return(first_try)
+    }
+
+    second_try <- tryCatch(
+      read.csv2(
+        path,
+        check.names = FALSE,
+        stringsAsFactors = FALSE
+      ),
+      error = function(e) {
+        NULL
+      }
+    )
+
+    if (!is.null(second_try)) {
+      return(second_try)
+    }
+  }
+
+  stop(
+    paste0(
+      "Could not read the selected file: ",
+      basename(path),
+      ". Please use CSV, XLSX or XLS."
+    ),
+    call. = FALSE
+  )
+}
+
+
+raw_data <- read_original_data(
+  raw_file
+)
+
+
+# ==============================================================================
+# 5. IDENTIFY REQUIRED COLUMNS
+# ==============================================================================
+
+site_col <- find_column(
+  raw_data,
+  c(
+    "site",
+    "binding site",
+    "binding_site",
+    "site_name"
+  )
+)
+
+top_residues_col <- find_column(
+  raw_data,
+  c(
+    "Top residues",
+    "top_residues",
+    "top residues",
+    "topresidues"
+  )
+)
+
+compound_col <- find_column(
+  raw_data,
+  c(
+    "compound",
+    "compound_name",
+    "ligand",
+    "ligand_name",
+    "ligando",
+    "composto",
+    "molecule",
+    "molecule_name",
+    "drug",
+    "treatment"
+  )
+)
+
+
+missing_descriptions <- character(0)
+
+if (is.null(site_col)) {
+  missing_descriptions <- c(
+    missing_descriptions,
+    "site"
+  )
+}
+
+if (is.null(top_residues_col)) {
+  missing_descriptions <- c(
+    missing_descriptions,
+    "Top residues"
+  )
+}
+
+if (is.null(compound_col)) {
+  missing_descriptions <- c(
+    missing_descriptions,
+    "compound/ligand"
+  )
+}
+
+if (length(missing_descriptions) > 0) {
+
+  stop(
+    paste0(
+      "Missing required data field(s): ",
+      paste(
+        missing_descriptions,
+        collapse = ", "
+      ),
+      ".\n\nAvailable columns:\n",
+      paste(
+        names(raw_data),
+        collapse = "\n"
+      )
+    ),
+    call. = FALSE
+  )
+}
+
+
+cat(
+  "\nDetected columns:\n",
+  "  Site:      ", site_col, "\n",
+  "  Compound:  ", compound_col, "\n",
+  "  Residues:  ", top_residues_col, "\n\n",
+  sep = ""
+)
+
+
+raw_data$site <- normalize_site(
+  raw_data[[site_col]]
+)
+
+raw_data$compound <- normalize_compound(
+  raw_data[[compound_col]]
+)
+
+raw_data$top_residues_text <- as.character(
+  raw_data[[top_residues_col]]
+)
+
+
+# Remove rows without site or compound identifiers
+valid_identifier_rows <-
+  !is.na(raw_data$site) &
+  trimws(raw_data$site) != "" &
+  !is.na(raw_data$compound) &
+  trimws(raw_data$compound) != ""
+
+if (any(!valid_identifier_rows)) {
+
+  warning(
+    paste0(
+      sum(!valid_identifier_rows),
+      " row(s) without a valid site/compound identifier were removed."
+    )
+  )
+
+  raw_data <- raw_data[
+    valid_identifier_rows,
+    ,
+    drop = FALSE
+  ]
+}
+
+
+# ==============================================================================
+# 6. SITE AND GROUP DEFINITIONS
+# ==============================================================================
+
+site_order <- c(
+  "BZD",
+  "BB",
+  "GABA"
+)
+
+sites_present <- unique(
+  raw_data$site
+)
+
+sites_available <- c(
+  site_order[
+    site_order %in% sites_present
+  ],
+  setdiff(
+    sites_present,
+    site_order
+  )
+)
+
+if (length(sites_available) == 0) {
+  stop(
+    "No site data were found.",
+    call. = FALSE
+  )
+}
+
+
+site_titles <- c(
+  "BZD" =
+    "BZD - α1/γ2 interface",
+
+  "BB" =
+    "BB - α1/β2 interface",
+
+  "GABA" =
+    "GABA - β2/α1 interface"
+)
+
+
+get_site_title <- function(site_name) {
+
+  if (site_name %in% names(site_titles)) {
+    return(
+      unname(
+        site_titles[[site_name]]
+      )
+    )
+  }
+
+  site_name
+}
+
+
+groups <- unique(
+  raw_data[
+    ,
+    c(
+      "site",
+      "compound"
+    ),
+    drop = FALSE
+  ]
+)
+
+
+site_rank <- match(
+  groups$site,
+  sites_available
+)
+
+compound_first_appearance <- match(
+  groups$compound,
+  unique(raw_data$compound)
+)
+
+groups <- groups[
+  order(
+    site_rank,
+    compound_first_appearance
+  ),
+  ,
+  drop = FALSE
+]
+
+rownames(groups) <- NULL
+
+
+compound_counts_by_site <- table(
+  groups$site
+)
+
+
+cat(
+  "\n============================================================\n",
+  "SITE × COMPOUND GROUPS DETECTED\n",
+  "============================================================\n",
+  sep = ""
+)
+
+for (site_name in sites_available) {
+
+  compounds_here <- groups$compound[
+    groups$site == site_name
+  ]
+
+  cat(
+    site_name,
+    ": ",
+    length(compounds_here),
+    " compound(s) -> ",
+    paste(
+      compounds_here,
+      collapse = ", "
+    ),
+    "\n",
+    sep = ""
+  )
+
+  if (length(compounds_here) != 4) {
+
+    warning(
+      paste0(
+        site_name,
+        " contains ",
+        length(compounds_here),
+        " compound(s), not 4. ",
+        "The script will analyze all groups that are actually present."
+      )
+    )
+  }
+}
+
+
+# ==============================================================================
+# 7. PARSE TOP RESIDUES
+# ==============================================================================
+
+parse_top_residues <- function(x) {
+
+  result <- numeric(0)
+
+  if (
+    is.na(x) ||
+    trimws(as.character(x)) == ""
+  ) {
+    return(result)
+  }
+
+  pieces <- strsplit(
+    as.character(x),
+    ";",
+    fixed = TRUE
+  )[[1]]
+
+  for (piece in pieces) {
+
+    piece <- trimws(
+      piece
+    )
+
+    # Residue label + contact value in parentheses.
+    # Examples:
+    # TYR210 (3)
+    # TYR210:A (3.5)
+    # TYR210A (2,5)
+    matched <- regexec(
+      "^(.+?)\\s*\\(([0-9]+(?:[\\.,][0-9]+)?)\\)$",
+      piece
+    )
+
+    captured <- regmatches(
+      piece,
+      matched
+    )[[1]]
+
+    if (length(captured) == 3) {
+
+      residue_name <- normalize_residue(
+        captured[2]
+      )
+
+      contact_value <- safe_num(
+        captured[3]
+      )
+
+      if (
+        is.finite(contact_value) &&
+        contact_value > 0
+      ) {
+
+        if (residue_name %in% names(result)) {
+
+          result[residue_name] <-
+            result[residue_name] +
+            contact_value
+
+        } else {
+
+          result[residue_name] <-
+            contact_value
+        }
+      }
+    }
+  }
+
+  result
+}
+
+
+# ==============================================================================
+# 8. BUILD POSE × RESIDUE MATRIX FOR ONE SITE × COMPOUND GROUP
+# ==============================================================================
+
+build_group_fingerprint <- function(
+    site_name,
+    compound_name
+) {
+
+  raw_group <- raw_data[
+    raw_data$site == site_name &
+      raw_data$compound == compound_name,
+    ,
+    drop = FALSE
+  ]
+
+  if (nrow(raw_group) == 0) {
+
+    stop(
+      paste0(
+        "No observations found for ",
+        site_name,
+        " × ",
+        compound_name,
+        "."
+      ),
+      call. = FALSE
+    )
+  }
+
+  parsed_rows <- lapply(
+    raw_group$top_residues_text,
+    parse_top_residues
+  )
+
+  all_residues <- sort(
+    unique(
+      unlist(
+        lapply(
+          parsed_rows,
+          names
+        )
+      )
+    )
+  )
+
+  if (length(all_residues) == 0) {
+
+    stop(
+      paste0(
+        "No residues could be parsed for ",
+        site_name,
+        " × ",
+        compound_name,
+        "."
+      ),
+      call. = FALSE
+    )
+  }
+
+  X <- matrix(
+    0,
+    nrow = nrow(raw_group),
+    ncol = length(all_residues),
+    dimnames = list(
+      NULL,
+      all_residues
+    )
+  )
+
+  for (i in seq_along(parsed_rows)) {
+
+    current <- parsed_rows[[i]]
+
+    if (length(current) == 0) {
+      next
+    }
+
+    X[
+      i,
+      names(current)
+    ] <- current
+  }
+
+  row_totals <- rowSums(
+    X,
+    na.rm = TRUE
+  )
+
+  valid_rows <- is.finite(row_totals) &
+    row_totals > 0
+
+  if (any(!valid_rows)) {
+
+    warning(
+      paste0(
+        site_name,
+        " × ",
+        compound_name,
+        ": ",
+        sum(!valid_rows),
+        " pose(s) had no parsable residue contacts and were excluded."
+      )
+    )
+
+    X <- X[
+      valid_rows,
+      ,
+      drop = FALSE
+    ]
+
+    raw_group <- raw_group[
+      valid_rows,
+      ,
+      drop = FALSE
+    ]
+  }
+
+  if (nrow(X) == 0) {
+
+    stop(
+      paste0(
+        "No valid poses remain for ",
+        site_name,
+        " × ",
+        compound_name,
+        "."
+      ),
+      call. = FALSE
+    )
+  }
+
+  nonzero_columns <- colSums(
+    X,
+    na.rm = TRUE
+  ) > 0
+
+  X <- X[
+    ,
+    nonzero_columns,
+    drop = FALSE
+  ]
+
+  if (ncol(X) == 0) {
+
+    stop(
+      paste0(
+        "No non-zero residue columns remain for ",
+        site_name,
+        " × ",
+        compound_name,
+        "."
+      ),
+      call. = FALSE
+    )
+  }
+
+  list(
+    X = X,
+    raw_group = raw_group
+  )
+}
+
+
+# ==============================================================================
+# 9. HELLINGER TRANSFORMATION
+# ==============================================================================
+
+hellinger_transform <- function(X) {
+
+  row_totals <- rowSums(
+    X,
+    na.rm = TRUE
+  )
+
+  if (any(row_totals <= 0)) {
+
+    stop(
+      "At least one pose has total residue-contact count <= 0.",
+      call. = FALSE
+    )
+  }
+
+  relative_matrix <- X /
+    row_totals
+
+  sqrt(
+    relative_matrix
+  )
+}
+
+
+# ==============================================================================
+# 10. RESIDUE FREQUENCY WITHIN ONE SITE × COMPOUND GROUP
+# ==============================================================================
+
+calculate_residue_frequency <- function(
+    site_name,
+    compound_name,
+    X_raw
+) {
+
+  frequency_n <- colSums(
+    X_raw > 0
+  )
+
+  frequency_percent <-
+    frequency_n /
+    nrow(X_raw) *
+    100
+
+  total_contacts <- colSums(
+    X_raw
+  )
+
+  result <- data.frame(
+    site = site_name,
+    compound = compound_name,
+    residue = colnames(X_raw),
+    n_poses = nrow(X_raw),
+    frequency_n = as.numeric(frequency_n),
+    frequency_percent = as.numeric(frequency_percent),
+    total_contacts = as.numeric(total_contacts),
+    stringsAsFactors = FALSE
+  )
+
+  result <- result[
+    order(
+      -result$frequency_n,
+      -result$total_contacts,
+      result$residue
+    ),
+    ,
+    drop = FALSE
+  ]
+
+  result$frequency_rank <-
+    seq_len(
+      nrow(result)
+    )
+
+  top <- head(
+    result,
+    min(
+      top_n_residues,
+      nrow(result)
+    )
+  )
+
+  list(
+    all = result,
+    top = top
+  )
+}
+
+
+# ==============================================================================
+# 11. GROUP-SPECIFIC PCA
+# ==============================================================================
+
+calculate_group_pca <- function(
+    site_name,
+    compound_name,
+    X_hellinger
+) {
+
+  residue_names <- colnames(
+    X_hellinger
+  )
+
+  # Default values used if PCA cannot estimate two components.
+  pc1_loading <- setNames(
+    rep(
+      0,
+      length(residue_names)
+    ),
+    residue_names
+  )
+
+  pc2_loading <- pc1_loading
+
+  PC1_variance <- 0
+  PC2_variance <- 0
+
+  if (
+    nrow(X_hellinger) >= 2 &&
+    ncol(X_hellinger) >= 1
+  ) {
+
+    pca_fit <- tryCatch(
+      prcomp(
+        X_hellinger,
+        center = TRUE,
+        scale. = FALSE
+      ),
+      error = function(e) {
+        NULL
+      }
+    )
+
+    if (!is.null(pca_fit)) {
+
+      rotation <- pca_fit$rotation
+
+      if (
+        !is.null(rotation) &&
+        ncol(rotation) >= 1
+      ) {
+
+        pc1_loading[
+          rownames(rotation)
+        ] <- rotation[, 1]
+      }
+
+      if (
+        !is.null(rotation) &&
+        ncol(rotation) >= 2
+      ) {
+
+        pc2_loading[
+          rownames(rotation)
+        ] <- rotation[, 2]
+      }
+
+      eigenvalues <- pca_fit$sdev^2
+
+      total_variance <- sum(
+        eigenvalues,
+        na.rm = TRUE
+      )
+
+      if (
+        is.finite(total_variance) &&
+        total_variance > 0
+      ) {
+
+        variance_percent <-
+          eigenvalues /
+          total_variance *
+          100
+
+        if (length(variance_percent) >= 1) {
+          PC1_variance <- variance_percent[1]
+        }
+
+        if (length(variance_percent) >= 2) {
+          PC2_variance <- variance_percent[2]
+        }
+      }
+    }
+  }
+
+  loadings <- data.frame(
+    site = site_name,
+    compound = compound_name,
+    residue = residue_names,
+    PC1_loading = as.numeric(
+      pc1_loading[residue_names]
+    ),
+    PC2_loading = as.numeric(
+      pc2_loading[residue_names]
+    ),
+    stringsAsFactors = FALSE
+  )
+
+  list(
+    loadings = loadings,
+    PC1_variance = PC1_variance,
+    PC2_variance = PC2_variance
+  )
+}
+
+
+# ==============================================================================
+# 12. NODE DATA
+# ==============================================================================
+
+calculate_nodes <- function(
+    site_name,
+    compound_name,
+    selected_residues,
+    frequency_table,
+    pca_result
+) {
+
+  loadings <- pca_result$loadings
+
+  idx <- match(
+    selected_residues,
+    loadings$residue
+  )
+
+  if (any(is.na(idx))) {
+
+    stop(
+      paste0(
+        "Selected residue missing from group PCA for ",
+        site_name,
+        " × ",
+        compound_name,
+        "."
+      ),
+      call. = FALSE
+    )
+  }
+
+  pc1 <- safe_num(
+    loadings$PC1_loading[
+      idx
+    ]
+  )
+
+  pc2 <- safe_num(
+    loadings$PC2_loading[
+      idx
+    ]
+  )
+
+  all_pc1 <- safe_num(
+    loadings$PC1_loading
+  )
+
+  all_pc2 <- safe_num(
+    loadings$PC2_loading
+  )
+
+  den1 <- sum(
+    all_pc1^2,
+    na.rm = TRUE
+  )
+
+  den2 <- sum(
+    all_pc2^2,
+    na.rm = TRUE
+  )
+
+  pc1_contribution <- if (
+    is.finite(den1) &&
+    den1 > 0
+  ) {
+    pc1^2 / den1 * 100
+  } else {
+    rep(
+      0,
+      length(pc1)
+    )
+  }
+
+  pc2_contribution <- if (
+    is.finite(den2) &&
+    den2 > 0
+  ) {
+    pc2^2 / den2 * 100
+  } else {
+    rep(
+      0,
+      length(pc2)
+    )
+  }
+
+  nodes <- data.frame(
+    site = site_name,
+    compound = compound_name,
+    residue = selected_residues,
+    PC1_loading = pc1,
+    PC2_loading = pc2,
+    PC1_contribution_percent = pc1_contribution,
+    PC2_contribution_percent = pc2_contribution,
+    stringsAsFactors = FALSE
+  )
+
+  freq_idx <- match(
+    nodes$residue,
+    frequency_table$residue
+  )
+
+  nodes$frequency_rank <-
+    frequency_table$frequency_rank[
+      freq_idx
+    ]
+
+  nodes$frequency_n <-
+    frequency_table$frequency_n[
+      freq_idx
+    ]
+
+  nodes$frequency_percent <-
+    frequency_table$frequency_percent[
+      freq_idx
+    ]
+
+  nodes$total_contacts <-
+    frequency_table$total_contacts[
+      freq_idx
+    ]
+
+  nodes
+}
+
+
+# ==============================================================================
+# 13. SPEARMAN ANALYSIS WITHIN ONE SITE × COMPOUND GROUP
+# ==============================================================================
+
+calculate_group_analysis <- function(
+    site_name,
+    compound_name
+) {
+
+  fingerprint_result <-
+    build_group_fingerprint(
+      site_name,
+      compound_name
+    )
+
+  X_raw <-
+    fingerprint_result$X
+
+  frequency_result <-
+    calculate_residue_frequency(
+      site_name,
+      compound_name,
+      X_raw
+    )
+
+  top_frequency <-
+    frequency_result$top
+
+  selected_residues <-
+    top_frequency$residue
+
+  X_hellinger <-
+    hellinger_transform(
+      X_raw
+    )
+
+  pca_result <-
+    calculate_group_pca(
+      site_name,
+      compound_name,
+      X_hellinger
+    )
+
+  X_top <- X_hellinger[
+    ,
+    selected_residues,
+    drop = FALSE
+  ]
+
+  if (length(selected_residues) < 2) {
+
+    edges <- empty_edges_table()
+
+  } else {
+
+    pair_idx <- combn(
+      seq_along(
+        selected_residues
+      ),
+      2
+    )
+
+    results <- vector(
+      "list",
+      ncol(pair_idx)
+    )
+
+    for (k in seq_len(ncol(pair_idx))) {
+
+      i <- pair_idx[
+        1,
+        k
+      ]
+
+      j <- pair_idx[
+        2,
+        k
+      ]
+
+      residue_1 <-
+        selected_residues[i]
+
+      residue_2 <-
+        selected_residues[j]
+
+      x <- X_top[
+        ,
+        i
+      ]
+
+      y <- X_top[
+        ,
+        j
+      ]
+
+      complete <-
+        is.finite(x) &
+        is.finite(y)
+
+      x_complete <- x[
+        complete
+      ]
+
+      y_complete <- y[
+        complete
+      ]
+
+      n_pair <- length(
+        x_complete
+      )
+
+      valid_test <-
+        n_pair >= 3 &&
+        length(
+          unique(
+            x_complete
+          )
+        ) >= 2 &&
+        length(
+          unique(
+            y_complete
+          )
+        ) >= 2
+
+      if (!valid_test) {
+
+        rho <- NA_real_
+        p <- NA_real_
+
+      } else {
+
+        test <- tryCatch(
+          suppressWarnings(
+            cor.test(
+              x_complete,
+              y_complete,
+              method = "spearman",
+              exact = FALSE
+            )
+          ),
+          error = function(e) {
+            NULL
+          }
+        )
+
+        if (is.null(test)) {
+
+          rho <- NA_real_
+          p <- NA_real_
+
+        } else {
+
+          rho <- unname(
+            test$estimate
+          )
+
+          p <- test$p.value
+        }
+      }
+
+      results[[k]] <- data.frame(
+        site = site_name,
+        compound = compound_name,
+        residue_1 = residue_1,
+        residue_2 = residue_2,
+        n = n_pair,
+        spearman_rho = rho,
+        spearman_abs = abs(rho),
+        spearman_p = p,
+        spearman_FDR = NA_real_,
+        stringsAsFactors = FALSE
+      )
+    }
+
+    edges <- do.call(
+      rbind,
+      results
+    )
+
+    valid_p <- is.finite(
+      edges$spearman_p
+    )
+
+    if (any(valid_p)) {
+
+      # IMPORTANT:
+      # FDR is corrected independently within each site × compound group.
+      edges$spearman_FDR[
+        valid_p
+      ] <- p.adjust(
+        edges$spearman_p[
+          valid_p
+        ],
+        method = "BH"
+      )
+    }
+  }
+
+  nodes <- calculate_nodes(
+    site_name = site_name,
+    compound_name = compound_name,
+    selected_residues = selected_residues,
+    frequency_table = top_frequency,
+    pca_result = pca_result
+  )
+
+  list(
+    site = site_name,
+    compound = compound_name,
+    n_poses = nrow(X_raw),
+    raw_matrix = X_raw,
+    hellinger_matrix = X_hellinger,
+    frequency_all = frequency_result$all,
+    frequency_top = top_frequency,
+    pca_loadings = pca_result$loadings,
+    PC1_variance = pca_result$PC1_variance,
+    PC2_variance = pca_result$PC2_variance,
+    nodes = nodes,
+    edges = edges
+  )
+}
+
+
+# ==============================================================================
+# 14. RUN ALL SITE × COMPOUND ANALYSES
+# ==============================================================================
+
+make_group_key <- function(
+    site_name,
+    compound_name
+) {
+
+  paste(
+    site_name,
+    compound_name,
+    sep = "__"
+  )
+}
+
+
+analysis_results <- list()
+
+
+for (group_i in seq_len(nrow(groups))) {
+
+  site_name <- groups$site[
+    group_i
+  ]
+
+  compound_name <- groups$compound[
+    group_i
+  ]
+
+  group_key <- make_group_key(
+    site_name,
+    compound_name
+  )
+
+  cat(
+    "\nAnalyzing ",
+    site_name,
+    " × ",
+    compound_name,
+    "...\n",
+    sep = ""
+  )
+
+  analysis_results[[group_key]] <-
+    calculate_group_analysis(
+      site_name,
+      compound_name
+    )
+}
+
+
+# ==============================================================================
+# 15. COLOUR SCALES
+# ==============================================================================
+
+# Spearman:
+# -1 = red
+#  0 = white
+# +1 = blue
+
+correlation_col_fun <- circlize::colorRamp2(
+  c(
+    -1,
+    0,
+    1
+  ),
+  c(
+    "#B2182B",
+    "#FFFFFF",
+    "#2166AC"
+  )
+)
+
+
+# PCA loading:
+# -1 = orange
+#  0 = white
+# +1 = green
+
+loading_col_fun <- circlize::colorRamp2(
+  c(
+    -1,
+    0,
+    1
+  ),
+  c(
+    "#D37C49",
+    "#FFFFFF",
+    "#2E8B57"
+  )
+)
+
+
+loading_colour <- function(x) {
+
+  if (
+    length(x) == 0 ||
+    !is.finite(x)
+  ) {
+    return("#FFFFFF")
+  }
+
+  loading_col_fun(
+    max(
+      -1,
+      min(
+        1,
+        x
+      )
+    )
+  )
+}
+
+
+# ==============================================================================
+# 16. PREPARE ONE GROUP FOR PLOTTING
+# ==============================================================================
+
+prepare_group_plot <- function(
+    site_name,
+    compound_name
+) {
+
+  group_key <- make_group_key(
+    site_name,
+    compound_name
+  )
+
+  group_result <-
+    analysis_results[[group_key]]
+
+  edges_group <-
+    group_result$edges
+
+  nodes_group <-
+    group_result$nodes
+
+  edges_plot <- edges_group[
+    is.finite(
+      edges_group$spearman_rho
+    ) &
+      is.finite(
+        edges_group$spearman_FDR
+      ) &
+      edges_group$spearman_FDR <=
+        maximum_FDR &
+      edges_group$spearman_abs >=
+        min_abs_correlation,
+    ,
+    drop = FALSE
+  ]
+
+  nodes_plot <- nodes_group[
+    order(
+      -nodes_group$PC1_loading,
+      nodes_group$residue
+    ),
+    ,
+    drop = FALSE
+  ]
+
+  residue_order <-
+    nodes_plot$residue
+
+  if (nrow(edges_plot) > 0) {
+
+    edges_plot$link_colour <-
+      correlation_col_fun(
+        edges_plot$spearman_rho
+      )
+
+  } else {
+
+    edges_plot$link_colour <-
+      character(0)
+  }
+
+  list(
+    edges = edges_plot,
+    all_edges = edges_group,
+    nodes = nodes_plot,
+    order = residue_order,
+    gap_after = rep(
+      sector_gap_degree,
+      length(residue_order)
+    ),
+    n_poses = group_result$n_poses,
+    PC1_variance = group_result$PC1_variance,
+    PC2_variance = group_result$PC2_variance
+  )
+}
+
+
+# ==============================================================================
+# 17. RIBBON ALLOCATION
+# ==============================================================================
+
+allocate_ribbon_intervals <- function(
+    edges,
+    residue_order
+) {
+
+  if (nrow(edges) == 0) {
+
+    return(
+      list(
+        edges = edges,
+        maximum_total = 1
+      )
+    )
+  }
+
+  totals <- setNames(
+    rep(
+      0,
+      length(residue_order)
+    ),
+    residue_order
+  )
+
+  for (k in seq_len(nrow(edges))) {
+
+    r1 <- edges$residue_1[k]
+    r2 <- edges$residue_2[k]
+    w <- edges$spearman_abs[k]
+
+    totals[r1] <-
+      totals[r1] + w
+
+    totals[r2] <-
+      totals[r2] + w
+  }
+
+  maximum_total <- max(
+    totals,
+    na.rm = TRUE
+  )
+
+  if (
+    !is.finite(maximum_total) ||
+    maximum_total <= 0
+  ) {
+    maximum_total <- 1
+  }
+
+  cursors <- setNames(
+    rep(
+      0,
+      length(residue_order)
+    ),
+    residue_order
+  )
+
+  allocation_order <- order(
+    edges$spearman_abs,
+    decreasing = TRUE
+  )
+
+  E <- edges[
+    allocation_order,
+    ,
+    drop = FALSE
+  ]
+
+  E$start_1 <- NA_real_
+  E$end_1 <- NA_real_
+  E$start_2 <- NA_real_
+  E$end_2 <- NA_real_
+
+  for (k in seq_len(nrow(E))) {
+
+    r1 <- E$residue_1[k]
+    r2 <- E$residue_2[k]
+    w <- E$spearman_abs[k]
+
+    E$start_1[k] <-
+      cursors[r1]
+
+    E$end_1[k] <-
+      cursors[r1] + w
+
+    E$start_2[k] <-
+      cursors[r2]
+
+    E$end_2[k] <-
+      cursors[r2] + w
+
+    cursors[r1] <-
+      cursors[r1] + w
+
+    cursors[r2] <-
+      cursors[r2] + w
+  }
+
+  list(
+    edges = E,
+    maximum_total = maximum_total
+  )
+}
+
+
+# ==============================================================================
+# 18. BOTTOM HORIZONTAL GRADIENT LEGEND
+# ==============================================================================
+
+draw_horizontal_gradient_bottom <- function(
+    x_center,
+    y_bottom,
+    bar_length,
+    bar_height,
+    colour_function,
+    title_text
+) {
+
+  x_left <-
+    x_center -
+    bar_length / 2
+
+  x_right <-
+    x_center +
+    bar_length / 2
+
+  y_top <-
+    y_bottom +
+    bar_height
+
+  gradient_values <- seq(
+    -1,
+    1,
+    length.out = 400
+  )
+
+  x_breaks <- seq(
+    x_left,
+    x_right,
+    length.out =
+      length(
+        gradient_values
+      ) + 1
+  )
+
+  for (i in seq_along(gradient_values)) {
+
+    rect(
+      xleft = x_breaks[i],
+      ybottom = y_bottom,
+      xright = x_breaks[i + 1],
+      ytop = y_top,
+      col = colour_function(
+        gradient_values[i]
+      ),
+      border = NA,
+      xpd = NA
+    )
+  }
+
+
+  text(
+    x = x_center,
+    y = y_top + legend_title_offset,
+    labels = title_text,
+    cex = legend_text_cex,
+    font = 1,
+    family = font_family,
+    adj = c(
+      0.5,
+      0.5
+    ),
+    xpd = NA
+  )
+
+  text(
+    x = c(
+      x_left,
+      x_center,
+      x_right
+    ),
+    y = y_bottom - legend_tick_offset,
+    labels = c(
+      "-1",
+      "0",
+      "+1"
+    ),
+    cex = legend_text_cex,
+    font = 1,
+    family = font_family,
+    adj = c(
+      0.5,
+      1
+    ),
+    xpd = NA
+  )
+}
+
+
+# ==============================================================================
+# 19. DRAW ONE SITE × COMPOUND CHORD DIAGRAM
+# ==============================================================================
+
+draw_main_chord <- function(
+    site_name,
+    compound_name
+) {
+
+  plot_data <- prepare_group_plot(
+    site_name,
+    compound_name
+  )
+
+  edges_plot <-
+    plot_data$edges
+
+  nodes_plot <-
+    plot_data$nodes
+
+  residue_order <-
+    plot_data$order
+
+  if (length(residue_order) == 0) {
+
+    plot.new()
+
+    text(
+      0.5,
+      0.5,
+      paste0(
+        "No residues available for ",
+        site_name,
+        " × ",
+        compound_name
+      )
+    )
+
+    return(
+      invisible(NULL)
+    )
+  }
+
+  ribbon_data <- allocate_ribbon_intervals(
+    edges_plot,
+    residue_order
+  )
+
+  edges_allocated <-
+    ribbon_data$edges
+
+  maximum_total <-
+    ribbon_data$maximum_total
+
+  PC1_variance <-
+    plot_data$PC1_variance
+
+  PC2_variance <-
+    plot_data$PC2_variance
+
+  par(
+    mar = c(
+      0.4,
+      0.2,
+      1.2,
+      0.2
+    ),
+    xpd = NA,
+    family = font_family
+  )
+
+  circos.clear()
+
+  circos.par(
+    start.degree = 90,
+    gap.after = plot_data$gap_after,
+    track.margin = c(
+      0.002,
+      0.002
+    ),
+    cell.padding = c(
+      0,
+      0,
+      0,
+      0
+    ),
+    points.overflow.warning = FALSE,
+    canvas.xlim = c(
+      -1.30,
+      1.30
+    ),
+    canvas.ylim = c(
+      -1.34,
+      1.08
+    )
+  )
+
+  circos.initialize(
+    factors = factor(
+      residue_order,
+      levels = residue_order
+    ),
+    xlim = cbind(
+      rep(
+        0,
+        length(residue_order)
+      ),
+      rep(
+        maximum_total,
+        length(residue_order)
+      )
+    )
+  )
+
+  # ---------------------------------------------------------------------------
+  # TRACK 1 — RESIDUE LABELS
+  # ---------------------------------------------------------------------------
+
+  circos.trackPlotRegion(
+    ylim = c(
+      0,
+      1
+    ),
+    track.height =
+      residue_track_height,
+    bg.border = NA,
+    bg.col = NA,
+    panel.fun = function(
+        x,
+        y
+    ) {
+
+      residue_name <-
+        CELL_META$sector.index
+
+      circos.text(
+        x = CELL_META$xcenter,
+        y = mean(
+          CELL_META$ylim
+        ),
+        labels = residue_name,
+        facing = "bending.outside",
+        niceFacing = TRUE,
+        adj = c(
+          0.5,
+          0.5
+        ),
+        cex = residue_label_cex,
+        font = 1,
+        family = font_family
+      )
+    }
+  )
+
+  # ---------------------------------------------------------------------------
+  # TRACK 2 — OUTER RING = GROUP-SPECIFIC PC1
+  # ---------------------------------------------------------------------------
+
+  circos.trackPlotRegion(
+    ylim = c(
+      0,
+      1
+    ),
+    track.height =
+      PC1_track_height,
+    bg.border = NA,
+    bg.col = NA,
+    panel.fun = function(
+        x,
+        y
+    ) {
+
+      residue_name <-
+        CELL_META$sector.index
+
+      idx <- match(
+        residue_name,
+        nodes_plot$residue
+      )
+
+      loading_value <-
+        nodes_plot$PC1_loading[
+          idx
+        ]
+
+      circos.rect(
+        CELL_META$xlim[1],
+        CELL_META$ylim[1],
+        CELL_META$xlim[2],
+        CELL_META$ylim[2],
+        col = loading_colour(
+          loading_value
+        ),
+        border = "white",
+        lwd = 0.7
+      )
+    }
+  )
+
+  # ---------------------------------------------------------------------------
+  # TRACK 3 — INNER RING = GROUP-SPECIFIC PC2
+  # ---------------------------------------------------------------------------
+
+  circos.trackPlotRegion(
+    ylim = c(
+      0,
+      1
+    ),
+    track.height =
+      PC2_track_height,
+    bg.border = NA,
+    bg.col = NA,
+    panel.fun = function(
+        x,
+        y
+    ) {
+
+      residue_name <-
+        CELL_META$sector.index
+
+      idx <- match(
+        residue_name,
+        nodes_plot$residue
+      )
+
+      loading_value <-
+        nodes_plot$PC2_loading[
+          idx
+        ]
+
+      circos.rect(
+        CELL_META$xlim[1],
+        CELL_META$ylim[1],
+        CELL_META$xlim[2],
+        CELL_META$ylim[2],
+        col = loading_colour(
+          loading_value
+        ),
+        border = "white",
+        lwd = 0.7
+      )
+    }
+  )
+
+  # ---------------------------------------------------------------------------
+  # SPEARMAN RIBBONS
+  # ---------------------------------------------------------------------------
+
+  if (nrow(edges_allocated) > 0) {
+
+    draw_order <- order(
+      edges_allocated$spearman_abs,
+      decreasing = FALSE
+    )
+
+    for (k in draw_order) {
+
+      ribbon_colour <- grDevices::adjustcolor(
+        edges_allocated$link_colour[k],
+        alpha.f = 0.80
+      )
+
+      circos.link(
+        sector.index1 =
+          edges_allocated$residue_1[k],
+        point1 = c(
+          edges_allocated$start_1[k],
+          edges_allocated$end_1[k]
+        ),
+        sector.index2 =
+          edges_allocated$residue_2[k],
+        point2 = c(
+          edges_allocated$start_2[k],
+          edges_allocated$end_2[k]
+        ),
+        col = ribbon_colour,
+        border = NA
+      )
+    }
+  }
+
+  # ---------------------------------------------------------------------------
+  # MAIN TITLE
+  # ---------------------------------------------------------------------------
+
+  text(
+    x = 0,
+    y = 1.15,
+    labels = paste0(
+      compound_name,
+      " | ",
+      get_site_title(
+        site_name
+      )
+    ),
+    cex = 1.28,
+    font = 2,
+    family = font_family,
+    adj = c(
+      0.5,
+      0.5
+    ),
+    xpd = NA
+  )
+
+  # ---------------------------------------------------------------------------
+  # GROUP-SPECIFIC PCA EXPLAINED VARIANCE
+  # ---------------------------------------------------------------------------
+
+  text(
+    x = PC_info_x,
+    y = PC1_info_y,
+    labels = paste0(
+      "PC1 (outer ring): ",
+      round(
+        PC1_variance,
+        1
+      ),
+      " %VE"
+    ),
+    cex = annotation_text_cex,
+    font = 2,
+    family = font_family,
+    adj = c(
+      0,
+      0.5
+    ),
+    xpd = NA
+  )
+
+  text(
+    x = PC_info_x,
+    y = PC2_info_y,
+    labels = paste0(
+      "PC2 (inner ring): ",
+      round(
+        PC2_variance,
+        1
+      ),
+      " %VE"
+    ),
+    cex = annotation_text_cex,
+    font = 2,
+    family = font_family,
+    adj = c(
+      0,
+      0.5
+    ),
+    xpd = NA
+  )
+
+  # ---------------------------------------------------------------------------
+  # BOTTOM HORIZONTAL LEGENDS
+  # ---------------------------------------------------------------------------
+
+  draw_horizontal_gradient_bottom(
+    x_center =
+      loading_legend_center_x,
+    y_bottom =
+      legend_y_bottom,
+    bar_length =
+      legend_bar_length,
+    bar_height =
+      legend_bar_height,
+    colour_function =
+      loading_col_fun,
+    title_text =
+      "Principal component loading"
+  )
+
+  draw_horizontal_gradient_bottom(
+    x_center =
+      correlation_legend_center_x,
+    y_bottom =
+      legend_y_bottom,
+    bar_length =
+      legend_bar_length,
+    bar_height =
+      legend_bar_height,
+    colour_function =
+      correlation_col_fun,
+    # Plotmath ensures Greek rho renders correctly in PDF, PNG and TIFF.
+    title_text =
+      expression("Spearman correlation (" * rho * ")")
+  )
+
+  circos.clear()
+}
+
+
+draw_group_figure <- function(
+    site_name,
+    compound_name
+) {
+
+  draw_main_chord(
+    site_name,
+    compound_name
+  )
+}
+
+
+# ==============================================================================
+# 20. OUTPUT DIRECTORY
+# ==============================================================================
+
+output_dir <- create_output_directory(
+  raw_file
+)
+
+
+# ==============================================================================
+# 21. COMBINE AND EXPORT TABLES
+# ==============================================================================
+
+all_edges <- do.call(
+  rbind,
+  lapply(
+    analysis_results,
+    function(x) {
+      x$edges
+    }
+  )
+)
+
+all_nodes <- do.call(
+  rbind,
+  lapply(
+    analysis_results,
+    function(x) {
+      x$nodes
+    }
+  )
+)
+
+all_frequency <- do.call(
+  rbind,
+  lapply(
+    analysis_results,
+    function(x) {
+      x$frequency_all
+    }
+  )
+)
+
+top10_frequency <- do.call(
+  rbind,
+  lapply(
+    analysis_results,
+    function(x) {
+      x$frequency_top
+    }
+  )
+)
+
+all_pca_loadings <- do.call(
+  rbind,
+  lapply(
+    analysis_results,
+    function(x) {
+      x$pca_loadings
+    }
+  )
+)
+
+
+group_summary <- do.call(
+  rbind,
+  lapply(
+    analysis_results,
+    function(x) {
+
+      significant_edges <- x$edges[
+        is.finite(
+          x$edges$spearman_FDR
+        ) &
+          x$edges$spearman_FDR <=
+            maximum_FDR &
+          x$edges$spearman_abs >=
+            min_abs_correlation,
+        ,
+        drop = FALSE
+      ]
+
+      data.frame(
+        site = x$site,
+        compound = x$compound,
+        n_poses = x$n_poses,
+        n_residues_total = ncol(
+          x$raw_matrix
+        ),
+        n_residues_top = nrow(
+          x$frequency_top
+        ),
+        n_spearman_tests = nrow(
+          x$edges
+        ),
+        n_significant_edges = nrow(
+          significant_edges
+        ),
+        PC1_variance_percent =
+          x$PC1_variance,
+        PC2_variance_percent =
+          x$PC2_variance,
+        stringsAsFactors = FALSE
+      )
+    }
+  )
+)
+
+
+excel_output <- safe_output_file(
+  output_dir,
+  "chord_diagram_by_site_compound_calculated.xlsx"
+)
+
+
+wb <- createWorkbook()
+
+addWorksheet(
+  wb,
+  "Group_summary"
+)
+
+writeData(
+  wb,
+  "Group_summary",
+  group_summary
+)
+
+addWorksheet(
+  wb,
+  "Spearman_edges"
+)
+
+writeData(
+  wb,
+  "Spearman_edges",
+  all_edges
+)
+
+addWorksheet(
+  wb,
+  "PCA_nodes"
+)
+
+writeData(
+  wb,
+  "PCA_nodes",
+  all_nodes
+)
+
+addWorksheet(
+  wb,
+  "PCA_loadings_all"
+)
+
+writeData(
+  wb,
+  "PCA_loadings_all",
+  all_pca_loadings
+)
+
+addWorksheet(
+  wb,
+  "Residue_frequency"
+)
+
+writeData(
+  wb,
+  "Residue_frequency",
+  all_frequency
+)
+
+addWorksheet(
+  wb,
+  "Top10_frequency"
+)
+
+writeData(
+  wb,
+  "Top10_frequency",
+  top10_frequency
+)
+
+saveWorkbook(
+  wb,
+  excel_output,
+  overwrite = TRUE
+)
+
+
+# ==============================================================================
+# 22. EXPORT INDIVIDUAL FIGURES AND CSV FILES
+# ==============================================================================
+
+for (group_i in seq_len(nrow(groups))) {
+
+  site_name <- groups$site[
+    group_i
+  ]
+
+  compound_name <- groups$compound[
+    group_i
+  ]
+
+  cat(
+    "\nGenerating ",
+    site_name,
+    " × ",
+    compound_name,
+    "...\n",
+    sep = ""
+  )
+
+  plot_data <- prepare_group_plot(
+    site_name,
+    compound_name
+  )
+
+  site_file <- safe_filename_component(
+    site_name
+  )
+
+  compound_file <- safe_filename_component(
+    compound_name
+  )
+
+  prefix <- paste0(
+    "ChordDiagram_",
+    site_file,
+    "_",
+    compound_file
+  )
+
+  # Significant Spearman edges
+  write.csv(
+    plot_data$edges,
+    safe_output_file(
+      output_dir,
+      paste0(
+        prefix,
+        "_significant_Spearman_edges.csv"
+      )
+    ),
+    row.names = FALSE
+  )
+
+  # Top 10 residues
+  write.csv(
+    plot_data$nodes,
+    safe_output_file(
+      output_dir,
+      paste0(
+        prefix,
+        "_Top10_residues.csv"
+      )
+    ),
+    row.names = FALSE
+  )
+
+  # PNG
+  png_file <- safe_output_file(
+    output_dir,
+    paste0(
+      prefix,
+      "_spearman_bottom_legends.png"
+    )
+  )
+
+  png(
+    filename = png_file,
+    width = png_width,
+    height = png_height,
+    res = png_res,
+    units = "px",
+    bg = output_background
+  )
+
+  draw_group_figure(
+    site_name,
+    compound_name
+  )
+
+  dev.off()
+
+  # TIFF
+  tiff_file <- safe_output_file(
+    output_dir,
+    paste0(
+      prefix,
+      "_spearman_bottom_legends.tiff"
+    )
+  )
+
+  tiff(
+    filename = tiff_file,
+    width = tiff_width,
+    height = tiff_height,
+    res = tiff_res,
+    units = "px",
+    compression = "lzw",
+    bg = output_background
+  )
+
+  draw_group_figure(
+    site_name,
+    compound_name
+  )
+
+  dev.off()
+
+  # PDF
+  pdf_file <- safe_output_file(
+    output_dir,
+    paste0(
+      prefix,
+      "_spearman_bottom_legends.pdf"
+    )
+  )
+
+  pdf(
+    file = pdf_file,
+    width = 11,
+    height = 8.75,
+    family = "Helvetica",
+    useDingbats = FALSE
+  )
+
+  draw_group_figure(
+    site_name,
+    compound_name
+  )
+
+  dev.off()
+}
+
+
+# ==============================================================================
+# 23. COMBINED PDF — ALL SITE × COMPOUND DIAGRAMS
+# ==============================================================================
+
+combined_pdf <- safe_output_file(
+  output_dir,
+  "ChordDiagram_ALL_SITE_COMPOUND_GROUPS.pdf"
+)
+
+pdf(
+  file = combined_pdf,
+  width = 11,
+  height = 8.75,
+  family = "Helvetica",
+  useDingbats = FALSE
+)
+
+for (group_i in seq_len(nrow(groups))) {
+
+  draw_group_figure(
+    groups$site[group_i],
+    groups$compound[group_i]
+  )
+}
+
+dev.off()
+
+
+# ==============================================================================
+# 24. OPTIONAL COMBINED PDF PER SITE
+# ==============================================================================
+
+for (site_name in sites_available) {
+
+  site_compounds <- groups$compound[
+    groups$site == site_name
+  ]
+
+  if (length(site_compounds) == 0) {
+    next
+  }
+
+  site_pdf <- safe_output_file(
+    output_dir,
+    paste0(
+      "ChordDiagram_",
+      safe_filename_component(
+        site_name
+      ),
+      "_ALL_COMPOUNDS.pdf"
+    )
+  )
+
+  pdf(
+    file = site_pdf,
+    width = 11,
+    height = 8.75,
+    family = "Helvetica",
+    useDingbats = FALSE
+  )
+
+  for (compound_name in site_compounds) {
+
+    draw_group_figure(
+      site_name,
+      compound_name
+    )
+  }
+
+  dev.off()
+}
+
+
+# ==============================================================================
+# 25. DISPLAY FIRST GROUP
+# ==============================================================================
+
+draw_group_figure(
+  groups$site[1],
+  groups$compound[1]
+)
+
+
+# ==============================================================================
+# 26. SUMMARY
+# ==============================================================================
+
+cat(
+  "\n============================================================\n",
+  "CHORD DIAGRAM ANALYSIS COMPLETED\n",
+  "============================================================\n\n",
+  sep = ""
+)
+
+cat(
+  "Analytical unit: SITE × COMPOUND\n"
+)
+
+cat(
+  "Residue source: Top residues column\n"
+)
+
+cat(
+  "Top residues selected independently within each site × compound group: ",
+  top_n_residues,
+  "\n",
+  sep = ""
+)
+
+cat(
+  "Spearman input: Hellinger-transformed residue fingerprint within group\n"
+)
+
+cat(
+  "PCA: recalculated independently within each site × compound group\n"
+)
+
+cat(
+  "Self-correlations: EXCLUDED\n"
+)
+
+cat(
+  "Duplicate A-B / B-A pairs: EXCLUDED\n"
+)
+
+cat(
+  "Maximum comparisons per group with Top 10 residues: 45\n"
+)
+
+cat(
+  "Multiple comparison correction: Benjamini-Hochberg FDR, independently within each group\n"
+)
+
+cat(
+  "FDR threshold: ",
+  maximum_FDR,
+  "\n\n",
+  sep = ""
+)
+
+
+for (group_i in seq_len(nrow(groups))) {
+
+  site_name <- groups$site[
+    group_i
+  ]
+
+  compound_name <- groups$compound[
+    group_i
+  ]
+
+  pd <- prepare_group_plot(
+    site_name,
+    compound_name
+  )
+
+  cat(
+    site_name,
+    " × ",
+    compound_name,
+    ": ",
+    pd$n_poses,
+    " poses | ",
+    nrow(pd$nodes),
+    " Top residues | ",
+    nrow(pd$edges),
+    " significant Spearman correlations\n",
+    sep = ""
+  )
+}
+
+
+cat(
+  "\nResidue order: highest group-specific PC1 loading -> lowest PC1 loading\n"
+)
+
+cat(
+  "Loading scale: -1 orange | 0 white | +1 green\n"
+)
+
+cat(
+  "Spearman scale: -1 red | 0 white | +1 blue\n"
+)
+
+cat(
+  "Gradient legends: horizontal, below the chord, centered for readability\n"
+)
+
+cat(
+  "\nExpected output if there are 3 sites × 4 compounds: 12 diagrams.\n"
+)
+
+cat(
+  "\nOutput folder:\n",
+  output_dir,
+  "\n",
+  sep = ""
+)
